@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 2009, 2011 Free Software Foundation, Inc.
+   Copyright (C) 2009, 2011, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -47,14 +47,14 @@ static const struct table_class table_paste_class;
 static struct table_paste *
 table_paste_cast (const struct table *table)
 {
-  assert (table->class == &table_paste_class);
+  assert (table->klass == &table_paste_class);
   return UP_CAST (table, struct table_paste, table);
 }
 
 static bool
 is_table_paste (const struct table *table, int orientation)
 {
-  return (table->class == &table_paste_class
+  return (table->klass == &table_paste_class
           && table_paste_cast (table)->orientation == orientation);
 }
 
@@ -148,18 +148,20 @@ table_paste (struct table *a, struct table *b, enum table_axis orientation)
   if (b == NULL)
     return a;
 
+  assert (a->n[!orientation] == b->n[!orientation]);
+
   /* Handle tables that know how to paste themselves. */
   if (!table_is_shared (a) && !table_is_shared (b) && a != b)
     {
-      if (a->class->paste != NULL)
+      if (a->klass->paste != NULL)
         {
-          struct table *new = a->class->paste (a, b, orientation);
+          struct table *new = a->klass->paste (a, b, orientation);
           if (new != NULL)
             return new;
         }
-      if (b->class->paste != NULL && a->class != b->class)
+      if (b->klass->paste != NULL && a->klass != b->klass)
         {
-          struct table *new = b->class->paste (a, b, orientation);
+          struct table *new = b->klass->paste (a, b, orientation);
           if (new != NULL)
             return new;
         }
@@ -182,11 +184,11 @@ table_hpaste (struct table *left, struct table *right)
   return table_paste (left, right, TABLE_HORZ);
 }
 
-/* Shorthand for table_paste (left, right, TABLE_VERT). */
+/* Shorthand for table_paste (top, bottom, TABLE_VERT). */
 struct table *
-table_vpaste (struct table *left, struct table *right)
+table_vpaste (struct table *top, struct table *bottom)
 {
-  return table_paste (left, right, TABLE_VERT);
+  return table_paste (top, bottom, TABLE_VERT);
 }
 
 static void

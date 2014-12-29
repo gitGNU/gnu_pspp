@@ -23,6 +23,7 @@ several utility functions for examining and adjusting them.
 * VARIABLE ALIGNMENT::          Set the alignment for display.
 * VARIABLE WIDTH::              Set the display width.
 * VARIABLE LEVEL::              Set the measurement level.
+* VARIABLE ROLE::               Set the role that a variable fills in analysis.
 * VECTOR::                      Declare an array of variables.
 * WRITE FORMATS::               Set variable write formats.
 @end menu
@@ -471,18 +472,45 @@ already present.
 @vindex STRING
 
 @display
-STRING /@var{var_list} (@var{fmt_spec}).
+STRING @var{var_list} (@var{fmt_spec}) [/@var{var_list} (@var{fmt_spec})] [@dots{}].
 @end display
 
 @cmd{STRING} creates new string variables for use in
 transformations.
 
-Specify a slash (@samp{/}), followed by the names of the string
-variables to create and the desired output format specification in
-parentheses (@pxref{Input and Output Formats}).  Variable widths are
+Specify a list of names for the variable you want to create,
+followed by the desired output format specification in
+parentheses (@pxref{Input and Output Formats}).  
+Variable widths are
 implicitly derived from the specified output formats.
+The created variables will be initialized to spaces.
 
-Created variables are initialized to spaces.
+If you want to create several variables with  distinct
+output formats, you can either use two or more separate @cmd{STRING} commands,
+or you can specify further variable list and format specification pairs, each separated
+from the previous by a slash (@samp{/}).
+
+The following example is one way to create three string variables; Two of the
+variables have format A24 and the other A80:
+@example
+STRING firstname lastname (A24) / address (A80).
+@end example
+
+@noindent Here is another way to achieve the same result:
+@example
+STRING firstname lastname (A24).
+STRING address (A80).
+@end example
+
+@noindent @dots{} and here is yet another way:
+
+@example
+STRING firstname (A24).
+STRING lastname (A24).
+STRING address (A80).
+@end example
+
+
 
 
 @node VARIABLE ATTRIBUTE
@@ -618,6 +646,42 @@ VARIABLE LEVEL
 @cmd{VARIABLE LEVEL} sets the measurement level of  variables.
 Currently, this has no effect except for certain third party software.
 
+
+@node VARIABLE ROLE
+@section VARIABLE ROLE
+@vindex VARIABLE ROLE
+@display
+VARIABLE ROLE
+        /@var{role} @var{var_list}
+        [/@var{role} @var{var_list}]@dots{}
+@end display
+
+@cmd{VARIABLE ROLE} sets the intended role of a variable for use in
+dialog boxes in graphical user interfaces.  Each @var{role} specifies
+one of the following roles for the variables that follow it:
+
+@table @code
+@item INPUT
+An input variable, such as an independent variable.
+
+@item TARGET
+An output variable, such as an dependent variable.
+
+@item BOTH
+A variable used for input and output.
+
+@item NONE
+No role assigned.  (This is a variable's default role.)
+
+@item PARTITION
+Used to break the data into groups for testing.
+
+@item SPLIT
+No meaning except for certain third party software.  (This role's
+meaning is unrelated to @cmd{SPLIT FILE}.)
+@end table
+
+The PSPPIRE GUI does not yet use variable roles as intended.
 
 @node VECTOR
 @section VECTOR

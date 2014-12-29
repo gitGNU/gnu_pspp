@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 1997-9, 2000, 2006, 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 1997-9, 2000, 2006, 2010, 2011, 2012, 2013 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -47,6 +47,7 @@
      lrecl=integer;
      tabwidth=integer;
      mode=mode:!character/binary/image/360;
+     ends=ends:lf/crlf;
      recform=recform:fixed/f/variable/v/spanned/vs;
      encoding=string.
 */
@@ -71,8 +72,8 @@ cmd_file_handle (struct lexer *lexer, struct dataset *ds)
   if (handle != NULL)
     {
       msg (SE, _("File handle %s is already defined.  "
-                 "Use CLOSE FILE HANDLE before redefining a file handle."),
-	   handle_name);
+                 "Use %s before redefining a file handle."),
+	   handle_name, "CLOSE FILE HANDLE");
       goto exit_free_handle_name;
     }
 
@@ -104,6 +105,10 @@ cmd_file_handle (struct lexer *lexer, struct dataset *ds)
           else
             msg (SE, _("%s must not be negative."), "TABWIDTH");
         }
+      if (cmd.ends == FH_LF)
+        properties.line_ends = FH_END_LF;
+      else if (cmd.ends == FH_CRLF)
+        properties.line_ends = FH_END_CRLF;
       break;
     case FH_IMAGE:
       properties.mode = FH_MODE_FIXED;
@@ -127,7 +132,7 @@ cmd_file_handle (struct lexer *lexer, struct dataset *ds)
         }
       else
         {
-          msg (SE, _("RECFORM must be specified with MODE=360."));
+          msg (SE, _("%s must be specified with %s."), "RECFORM", "MODE=360");
           goto exit_free_cmd;
         }
       break;

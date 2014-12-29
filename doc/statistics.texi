@@ -8,6 +8,7 @@ far.
 * DESCRIPTIVES::                Descriptive statistics.
 * FREQUENCIES::                 Frequency tables.
 * EXAMINE::                     Testing data for normality.
+* GRAPH::                       Plot data.
 * CORRELATIONS::                Correlation tables.
 * CROSSTABS::                   Crosstabulation tables.
 * FACTOR::                      Factor analysis and Principal Components analysis.
@@ -73,6 +74,8 @@ names ZSC000 through ZSC999, STDZ00 through STDZ09, ZZZZ00 through
 ZZZZ09, ZQZQ00 through ZQZQ09, in that sequence.  In addition, Z score
 variable names can be specified explicitly on @subcmd{VARIABLES} in the variable
 list by enclosing them in parentheses after each variable.
+When Z scores are calculated, @pspp{} ignores @cmd{TEMPORARY},
+treating temporary transformations as permanent.
 
 The @subcmd{STATISTICS} subcommand specifies the statistics to be displayed:
 
@@ -192,9 +195,13 @@ For instance, @subcmd{/NTILES=4} would cause quartiles to be reported.
 The @subcmd{HISTOGRAM} subcommand causes the output to include a histogram for
 each specified numeric variable.  The X axis by default ranges from
 the minimum to the maximum value observed in the data, but the @subcmd{MINIMUM}
-and @subcmd{MAXIMUM} keywords can set an explicit range.  Specify @subcmd{NORMAL} to
-superimpose a normal curve on the histogram.  Histograms are not
-created for string variables.
+and @subcmd{MAXIMUM} keywords can set an explicit range. The number of
+bins are 2IQR(x)n^-1/3 according to the Freedman-Diaconis rule.  (Note that
+@cmd{EXAMINE} uses a different algorithm to determine bin sizes.)
+Histograms are not created for string variables.
+
+Specify @subcmd{NORMAL} to superimpose a normal curve on the
+histogram.
 
 @cindex piechart
 The @subcmd{PIECHART} subcommand adds a pie chart for each variable to the data.  Each
@@ -212,7 +219,7 @@ but not currently honoured.
 
 @vindex EXAMINE
 @cindex Exploratory data analysis
-@cindex Normality, testing for
+@cindex normality, testing
 
 @display
 EXAMINE
@@ -285,6 +292,10 @@ The first three can be used to visualise how closely each cell conforms to a
 normal distribution, whilst the spread vs.@: level plot can be useful to visualise
 how the variance of differs between factors.
 Boxplots will also show you the outliers and extreme values.
+
+@subcmd{HISTOGRAM} uses Sturges' rule to determine the number of
+bins, as approximately 1 + log2(n).  (Note that @cmd{FREQUENCIES} uses a
+different algorithm to find the bin size.)
 
 The @subcmd{SPREADLEVEL} plot displays the interquartile range versus the 
 median.  It takes an optional parameter @var{t}, which specifies how the data
@@ -372,6 +383,52 @@ If many dependent variables are specified, or if factor variables are
 specified for which
 there are many distinct values, then @cmd{EXAMINE} will produce a very
 large quantity of output.
+
+@node GRAPH
+@section GRAPH
+
+@vindex GRAPH
+@cindex Exploratory data analysis
+@cindex normality, testing
+
+@display
+GRAPH
+        /HISTOGRAM = @var{var}
+        /SCATTERPLOT [(BIVARIATE)] = @var{var1} WITH @var{var2} [BY @var{var3}] 
+        [ /MISSING=@{LISTWISE, VARIABLE@} [@{EXCLUDE, INCLUDE@}] ] 
+		[@{NOREPORT,REPORT@}]
+
+@end display
+
+The @cmd{GRAPH} produces graphical plots of data. Only one of the subcommands 
+@subcmd{HISTOGRAM} or @subcmd{SCATTERPLOT} can be specified, i.e. only one plot
+can be produced per call of @cmd{GRAPH}. The @subcmd{MISSING} is optional. 
+
+@cindex scatterplot
+
+The subcommand @subcmd{SCATTERPLOT} produces an xy plot of the data. The different 
+values of the optional third variable @var{var3} will result in different colours and/or
+markers for the plot. The following is an example for producing a scatterplot.
+
+@example
+GRAPH   
+        /SCATTERPLOT = @var{height} WITH @var{weight} BY @var{gender}.
+@end example
+
+This example will produce a scatterplot where height is plotted versus weight. Depending
+on the value of the gender variable, the colour of the datapoint is different. With
+this plot it is possible to analyze gender differences for height vs. weight relation.
+
+@cindex histogram
+
+The subcommand @subcmd{HISTOGRAM} produces a histogram. Only one variable is allowed for
+the histogram plot. For an alternative method to produce histograms @pxref{EXAMINE}. The
+following example produces a histogram plot for variable weigth.
+
+@example
+GRAPH   
+        /HISTOGRAM = @var{weight}.
+@end example
 
 @node CORRELATIONS
 @section CORRELATIONS
@@ -498,7 +555,7 @@ The @subcmd{FORMAT} subcommand controls the characteristics of the
 crosstabulation tables to be displayed.  It has a number of possible
 settings:
 
-@itemize @asis
+@itemize @w{}
 @item
 @subcmd{TABLES}, the default, causes crosstabulation tables to be output.
 @subcmd{NOTABLES} suppresses them.
@@ -597,23 +654,16 @@ some statistics are calculated only in integer mode.
 @subcmd{STATISTICS} subcommand is not given, no statistics are calculated.
 
 @strong{Please note:} Currently the implementation of @cmd{CROSSTABS} has the
-followings bugs:
+following bugs:
 
 @itemize @bullet
 @item
-Pearson's R (but not Spearman) is off a little.
+Significance of some symmetric and directional measures is not calculated.
 @item
-T values for Spearman's R and Pearson's R are wrong.
+Asymptotic standard error is not calculated for
+Goodman and Kruskal's tau or symmetric Somers' d.
 @item
-Significance of symmetric and directional measures is not calculated.
-@item
-Asymmetric ASEs and T values for lambda are wrong.
-@item
-ASE of Goodman and Kruskal's tau is not calculated.
-@item
-ASE of symmetric somers' d is wrong.
-@item
-Approximate T of uncertainty coefficient is wrong.
+Approximate T is not calculated for symmetric uncertainty coefficient.
 @end itemize
 
 Fixes for any of these deficiencies would be welcomed.
@@ -634,7 +684,7 @@ FACTOR  VARIABLES=@var{var_list}
 
         [ /EXTRACTION=@{PC, PAF@}] 
 
-        [ /ROTATION=@{VARIMAX, EQUAMAX, QUARTIMAX, NOROTATE@}]
+        [ /ROTATION=@{VARIMAX, EQUAMAX, QUARTIMAX, PROMAX[(@var{k})], NOROTATE@}]
 
         [ /PRINT=[INITIAL] [EXTRACTION] [ROTATION] [UNIVARIATE] [CORRELATION] [COVARIANCE] [DET] [KMO] [SIG] [ALL] [DEFAULT] ]
 
@@ -658,9 +708,13 @@ If @subcmd{PAF} is specified, then Principal Axis Factoring is
 used. By default Principal Components Analysis will be used.
 
 The @subcmd{/ROTATION} subcommand is used to specify the method by which the extracted solution will be rotated.
-Three methods are available: @subcmd{VARIMAX} (which is the default), @subcmd{EQUAMAX}, and @subcmd{QUARTIMAX}.
-If don't want any rotation to be performed, the word @subcmd{NOROTATE} will prevent the command from performing any
-rotation on the data. Oblique rotations are not supported.
+Three orthogonal rotation methods are available: 
+@subcmd{VARIMAX} (which is the default), @subcmd{EQUAMAX}, and @subcmd{QUARTIMAX}.
+There is one oblique rotation method, @i{viz}: @subcmd{PROMAX}.
+Optionally you may enter the power of the promax rotation @var{k}, which must be enclosed in parentheses.
+The default value of @var{k} is 5.
+If you don't want any rotation to be performed, the word @subcmd{NOROTATE} will prevent the command from performing any
+rotation on the data. 
 
 The @subcmd{/METHOD} subcommand should be used to determine whether the covariance matrix or the correlation matrix of the data is
 to be analysed.  By default, the correlation matrix is analysed.
@@ -703,13 +757,23 @@ performed, and all coefficients will be printed.
 The @subcmd{/CRITERIA} subcommand is used to specify how the number of extracted factors (components) are chosen.
 If @subcmd{FACTORS(@var{n})} is
 specified, where @var{n} is an integer, then @var{n} factors will be extracted.  Otherwise, the @subcmd{MINEIGEN} setting will
-be used.  @subcmd{MINEIGEN(@var{l})} requests that all factors whose eigenvalues are greater than or equal to @var{l} are extracted.
-The default value of @var{l} is 1.    The @subcmd{ECONVERGE} and @subcmd{ITERATE} settings have effect only when iterative algorithms for factor
-extraction (such as Principal Axis Factoring) are used.   @subcmd{ECONVERGE(@var{delta})} specifies that
+be used.  
+@subcmd{MINEIGEN(@var{l})} requests that all factors whose eigenvalues are greater than or equal to @var{l} are extracted.
+The default value of @var{l} is 1.    
+The @subcmd{ECONVERGE} setting has effect only when iterative algorithms for factor
+extraction (such as Principal Axis Factoring) are used.   
+@subcmd{ECONVERGE(@var{delta})} specifies that
 iteration should cease when
 the maximum absolute value of the communality estimate between one iteration and the previous is less than @var{delta}. The
 default value of @var{delta} is 0.001.
-The @subcmd{ITERATE(@var{m})} setting sets the maximum number of iterations to @var{m}.  The default value of @var{m} is 25.
+The @subcmd{ITERATE(@var{m})} may appear any number of times and is used for two different purposes.  
+It is used to set the maximum number of iterations (@var{m}) for convergence and also to set the maximum number of iterations
+for rotation.
+Whether it affects convergence or rotation depends upon which subcommand follows the @subcmd{ITERATE} subcommand.
+If @subcmd{EXTRACTION} follows, it affects convergence.  
+If @subcmd{ROTATION} follows, it affects rotation.  
+If neither @subcmd{ROTATION} nor @subcmd{EXTRACTION} follow a @subcmd{ITERATE} subcommand it will be ignored.
+The default value of @var{m} is 25.
 
 The @cmd{MISSING} subcommand determines the handling of missing variables.  
 If @subcmd{INCLUDE} is set, then user-missing values are included in the

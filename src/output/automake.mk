@@ -24,6 +24,8 @@ src_output_liboutput_la_SOURCES = \
 	src/output/charts/spreadlevel-plot.h \
 	src/output/charts/scree.c \
 	src/output/charts/scree.h \
+	src/output/charts/scatterplot.c \
+	src/output/charts/scatterplot.h \
 	src/output/csv.c \
 	src/output/driver-provider.h \
 	src/output/driver.c \
@@ -52,6 +54,7 @@ src_output_liboutput_la_SOURCES = \
 	src/output/table-paste.c \
 	src/output/table-provider.h \
 	src/output/table-select.c \
+	src/output/table-stomp.c \
 	src/output/table-transpose.c \
 	src/output/table.c \
 	src/output/table.h \
@@ -69,10 +72,13 @@ src_output_liboutput_la_SOURCES += \
 	src/output/charts/plot-hist-cairo.c \
 	src/output/charts/roc-chart-cairo.c \
 	src/output/charts/scree-cairo.c \
-	src/output/charts/spreadlevel-cairo.c
+	src/output/charts/spreadlevel-cairo.c \
+	src/output/charts/scatterplot-cairo.c
 endif
 if ODF_WRITE_SUPPORT
 src_output_liboutput_la_SOURCES += src/output/odt.c
 endif
 
-EXTRA_DIST += src/output/OChangeLog
+EXTRA_DIST += \
+	src/output/README \
+	src/output/mk-class-boilerplate

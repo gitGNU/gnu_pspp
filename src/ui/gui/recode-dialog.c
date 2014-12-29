@@ -1,5 +1,5 @@
 /* PSPPIRE - a graphical user interface for PSPP.
-   Copyright (C) 2007, 2009, 2010, 2011, 2012  Free Software Foundation
+   Copyright (C) 2007, 2009, 2010, 2011, 2012, 2014  Free Software Foundation
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -30,6 +30,7 @@
 
 #include <gtk/gtk.h>
 
+#include <float.h>
 #include <xalloc.h>
 #include <ui/gui/psppire-data-window.h>
 #include <ui/gui/dialog-common.h>
@@ -37,7 +38,6 @@
 #include <ui/gui/builder-wrapper.h>
 #include "helper.h"
 #include <ui/gui/psppire-dialog.h>
-#include <ui/gui/psppire-var-store.h>
 
 #include "psppire-val-chooser.h"
 
@@ -105,7 +105,7 @@ new_value_to_string (const GValue *src, GValue *dest)
     {
     case NV_NUMERIC:
       {
-	gchar *text = g_strdup_printf ("%g", nv->v.v);
+	gchar *text = g_strdup_printf ("%.*g", DBL_DIG + 1, nv->v.v);
 	g_value_set_string (dest, text);
 	g_free (text);
       }
@@ -315,7 +315,7 @@ recode_different_dialog (PsppireDataWindow *de)
 static gchar *
 num_to_string (gdouble x)
 {
-  return g_strdup_printf ("%g", x);
+  return g_strdup_printf ("%.*g", DBL_DIG + 1, x);
 }
 
 /* Callback which gets called when a new row is selected
@@ -620,9 +620,6 @@ recode_dialog (PsppireDataWindow *de, gboolean diff)
 
   GtkWidget *output_variable_box = get_widget_assert (builder,"frame4");
 
-  PsppireVarStore *vs = NULL;
-  g_object_get (de->data_editor, "var-store", &vs, NULL);
-
   rd.change_button = get_widget_assert (builder, "change-button");
   rd.varmap = NULL;
   rd.dialog = get_widget_assert   (builder, "recode-dialog");
@@ -631,7 +628,7 @@ recode_dialog (PsppireDataWindow *de, gboolean diff)
   rd.new_name_entry = get_widget_assert (builder, "dest-name-entry");
   rd.new_label_entry = get_widget_assert (builder, "dest-label-entry");
 
-  g_object_get (vs, "dictionary", &rd.dict, NULL);
+  g_object_get (de->data_editor, "dictionary", &rd.dict, NULL);
 
   rd.value_map = gtk_list_store_new (2,
 				     old_value_get_type (),
@@ -960,7 +957,7 @@ new_value_append_syntax (struct string *dds, const struct new_value *nv)
   switch (nv->type)
     {
     case NV_NUMERIC:
-      ds_put_c_format (dds, "%g", nv->v.v);
+      ds_put_c_format (dds, "%.*g", DBL_DIG + 1, nv->v.v);
       break;
     case NV_STRING:
       syntax_gen_string (dds, ss_cstr (nv->v.s));

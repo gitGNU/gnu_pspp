@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 2011 Free Software Foundation, Inc.
+   Copyright (C) 2011, 2013, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -65,9 +65,7 @@ stored_finish (struct zip_member *zm UNUSED)
 static struct decompressor decompressors[n_COMPRESSION] = 
   {
     {stored_init, stored_read, stored_finish},
-#if HAVE_ZLIB_H
     {inflate_init, inflate_read, inflate_finish}
-#endif
   };
 
 static enum compression
@@ -79,11 +77,9 @@ comp_code (struct zip_member *zm, uint16_t c)
     case 0:
       which = COMPRESSION_STORED;
       break;
-#if HAVE_ZLIB_H
     case 8:
       which = COMPRESSION_INFLATE;
       break;
-#endif
     default:
       ds_put_format (zm->errs, _("Unsupported compression type (%d)"), c);
       which = n_COMPRESSION;
@@ -275,14 +271,14 @@ zip_header_read_next (struct zip_reader *zr)
   get_u32 (zr->fr, &eattr);
   get_u32 (zr->fr, &zm->offset);
 
-  zm->name = calloc (nlen + 1, 1);
+  zm->name = xzalloc (nlen + 1);
   get_bytes (zr->fr, zm->name, nlen);
 
   skip_bytes (zr->fr, extralen);
   
   zr->members[zr->nm++] = zm;
 
-  zm->fp = fopen (zr->filename, "r");
+  zm->fp = fopen (zr->filename, "rb");
   zm->ref_cnt = 1;
   zm->errs = zr->errs;
 
@@ -298,14 +294,14 @@ zip_reader_create (const char *filename, struct string *errs)
   off_t offset = 0;
   uint32_t central_dir_start, central_dir_length;
 
-  struct zip_reader *zr = malloc (sizeof *zr);
+  struct zip_reader *zr = xzalloc (sizeof *zr);
   zr->errs = errs;
   if ( zr->errs)
     ds_init_empty (zr->errs);
 
   zr->nm = 0;
 
-  zr->fr = fopen (filename, "r");
+  zr->fr = fopen (filename, "rb");
   if (NULL == zr->fr)
     {
       ds_put_cstr (zr->errs, strerror (errno));
@@ -363,7 +359,8 @@ zip_reader_create (const char *filename, struct string *errs)
       return NULL;
     }
 
-  zr->members = calloc (zr->n_members, sizeof (*zr->members));
+  zr->members = xcalloc (zr->n_members, sizeof (*zr->members));
+  memset (zr->members, 0, zr->n_members * sizeof (*zr->members));
 
   zr->filename = strdup (filename);
 
@@ -381,7 +378,7 @@ zip_member_open (struct zip_reader *zr, const char *member)
   uint32_t ucomp_size, comp_size;
   
   uint32_t crc;
-
+  bool new_member = false;
   char *name = NULL;
 
   int i;
@@ -390,17 +387,19 @@ zip_member_open (struct zip_reader *zr, const char *member)
   if ( zr == NULL)
     return NULL;
 
-  for (i = 0 ; i < zr->n_members; ++i)
+  for (i = 0; i < zr->n_members; ++i)
   {
-    zm = zr->members[i] = zip_header_read_next (zr);
+    zm = zr->members[i];
+
+    if (zm == NULL)
+      {
+	zm = zr->members[i] = zip_header_read_next (zr);
+	new_member = true;
+      }
     if (zm && 0 == strcmp (zm->name, member))
-      {
-	break;
-      }
+      break;
     else
-      {
-	zm = NULL;
-      }
+      zm = NULL;
   }
   
   if ( zm == NULL)
@@ -431,7 +430,7 @@ zip_member_open (struct zip_reader *zr, const char *member)
   get_u16 (zm->fp, &nlen);
   get_u16 (zm->fp, &extra_len);
 
-  name = calloc (nlen + 1, sizeof (char));
+  name = xzalloc (nlen + 1);
 
   get_bytes (zm->fp, name, nlen);
 
@@ -450,8 +449,11 @@ zip_member_open (struct zip_reader *zr, const char *member)
   free (name);
 
   zm->bytes_unread = zm->ucomp_size;
+  
+  if ( !new_member)
+    decompressors[zm->compression].finish (zm);
 
-  if ( !  decompressors[zm->compression].init (zm) )
+  if (!decompressors[zm->compression].init (zm) )
     return NULL;
 
   return zm;
@@ -549,7 +551,8 @@ probe_magic (FILE *fp, uint32_t magic, off_t start, off_t stop, off_t *off)
 
   do
     {
-      fread (&byte, 1, 1, fp);
+      if (1 != fread (&byte, 1, 1, fp))
+	break;
 
       if ( byte == seq[state])
 	state++;

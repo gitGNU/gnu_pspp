@@ -24,7 +24,7 @@ src_ui_terminal_pspp_LDADD = \
 	src/libpspp-core.la \
 	$(CAIRO_LIBS) \
 	$(NCURSES_LIBS) \
-	$(LIBREADLINE) \
+	$(LTLIBREADLINE) \
 	$(GSL_LIBS)
 
 
@@ -33,5 +33,3 @@ src_ui_terminal_pspp_LDFLAGS = $(PSPP_LDFLAGS) $(PG_LDFLAGS)
 if RELOCATABLE_VIA_LD
 src_ui_terminal_pspp_LDFLAGS += `$(RELOCATABLE_LDFLAGS) $(bindir)`
 endif
-
-EXTRA_DIST += src/ui/terminal/OChangeLog

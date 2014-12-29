@@ -1,5 +1,5 @@
 /* PSPPIRE - a graphical user interface for PSPP.
-   Copyright (C) 2004, 2005, 2006, 2009, 2010, 2011  Free Software Foundation
+   Copyright (C) 2004, 2005, 2006, 2009, 2010, 2011, 2012, 2013, 2014  Free Software Foundation
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -16,6 +16,7 @@
 
 #include <config.h>
 
+
 #include <assert.h>
 #include <gsl/gsl_errno.h>
 #include <gtk/gtk.h>
@@ -28,10 +29,8 @@
 #include "data/datasheet.h"
 #include "data/file-handle-def.h"
 #include "data/file-name.h"
-#include "data/por-file-reader.h"
 #include "data/session.h"
 #include "data/settings.h"
-#include "data/sys-file-reader.h"
 
 #include "language/lexer/lexer.h"
 #include "libpspp/i18n.h"
@@ -51,18 +50,20 @@
 #include "ui/gui/psppire-output-window.h"
 #include "ui/gui/psppire-syntax-window.h"
 #include "ui/gui/psppire-selector.h"
-#include "ui/gui/psppire-var-store.h"
 #include "ui/gui/psppire-var-view.h"
+#include "ui/gui/psppire-means-layer.h"
 #include "ui/gui/psppire-window-register.h"
 #include "ui/gui/widgets.h"
 #include "ui/source-init-opts.h"
 #include "ui/syntax-gen.h"
 
+#include "ui/gui/icons/icon-names.h"
+
+
 #include "gl/configmake.h"
 #include "gl/xalloc.h"
 #include "gl/relocatable.h"
 
-static void inject_renamed_icons (void);
 static void create_icon_factory (void);
 static gchar *local_to_filename_encoding (const char *fn);
 
@@ -74,13 +75,12 @@ static gchar *local_to_filename_encoding (const char *fn);
 void
 initialize (const char *data_file)
 {
-  PsppireDataWindow *data_window;
-
   i18n_init ();
 
   preregister_widgets ();
 
   gsl_set_error_handler_off ();
+  output_engine_push ();
   settings_init ();
   fh_init ();
 
@@ -88,33 +88,39 @@ initialize (const char *data_file)
 
   bind_textdomain_codeset (PACKAGE, "UTF-8");
 
-  inject_renamed_icons ();
   create_icon_factory ();
 
   psppire_output_window_setup ();
 
-  journal_enable ();
+  journal_init ();
   textdomain (PACKAGE);
 
+  /* FIXME: This should be implemented with a GtkInterface */
   psppire_selector_set_default_selection_func (GTK_TYPE_ENTRY, insert_source_row_into_entry);
   psppire_selector_set_default_selection_func (PSPPIRE_VAR_VIEW_TYPE, insert_source_row_into_tree_view);
   psppire_selector_set_default_selection_func (GTK_TYPE_TREE_VIEW, insert_source_row_into_tree_view);
-
-  data_window = psppire_default_data_window ();
+  psppire_selector_set_default_selection_func (PSPPIRE_TYPE_MEANS_LAYER, insert_source_row_into_layers);
 
   if (data_file)
     {
       gchar *filename = local_to_filename_encoding (data_file);
 
+      int retval = any_reader_detect (filename, NULL);
+
       /* Check to see if the file is a .sav or a .por file.  If not
          assume that it is a syntax file */
-      if ( any_reader_may_open (filename))
-        psppire_window_load (PSPPIRE_WINDOW (data_window), filename);
-      else
-        open_syntax_window (filename, NULL);
+      if (retval == 1)
+	open_data_window (NULL, filename, NULL, NULL);
+      else if (retval == 0)
+        {
+          create_data_window ();
+          open_syntax_window (filename, NULL);
+        }
 
       g_free (filename);
     }
+  else
+    create_data_window ();
 }
 
 
@@ -122,7 +128,7 @@ void
 de_initialize (void)
 {
   settings_done ();
-  output_close ();
+  output_engine_pop ();
   i18n_done ();
 }
 
@@ -144,107 +150,135 @@ psppire_quit (void)
   gtk_main_quit ();
 }
 
-static void
-inject_renamed_icon (const char *icon, const char *substitute)
+struct icon_size
 {
-  GtkIconTheme *theme = gtk_icon_theme_get_default ();
-  if (!gtk_icon_theme_has_icon (theme, icon)
-      && gtk_icon_theme_has_icon (theme, substitute))
-    {
-      gint *sizes = gtk_icon_theme_get_icon_sizes (theme, substitute);
-      gint *p;
-
-      for (p = sizes; *p != 0; p++)
-        {
-          gint size = *p;
-          GdkPixbuf *pb;
-
-          pb = gtk_icon_theme_load_icon (theme, substitute, size, 0, NULL);
-          if (pb != NULL)
-            {
-              GdkPixbuf *copy = gdk_pixbuf_copy (pb);
-              if (copy != NULL)
-                gtk_icon_theme_add_builtin_icon (icon, size, copy);
-            }
-        }
-    }
-}
-
-/* Avoid a bug in GTK+ 2.22 that can cause a segfault at startup time.  Earlier
-   and later versions of GTK+ do not have the bug.  Bug #31511.
-
-   Based on this patch against Inkscape:
-   https://launchpadlibrarian.net/60175914/copy_renamed_icons.patch */
-static void
-inject_renamed_icons (void)
-{
-  if (gtk_major_version == 2 && gtk_minor_version == 22)
-    {
-      inject_renamed_icon ("gtk-file", "document-x-generic");
-      inject_renamed_icon ("gtk-directory", "folder");
-    }
-}
-
-struct icon_info
-{
-  const char *file_name;
-  const gchar *id;
+  int resolution;  /* The dimension of the images which will be used */
+  size_t n_sizes;  /* The number of items in the array below. */
+  const GtkIconSize *usage; /* An array determining for what the icon set is used */
 };
 
+static const GtkIconSize menus[] = {GTK_ICON_SIZE_MENU};
+static const GtkIconSize large_toolbar[] = {GTK_ICON_SIZE_LARGE_TOOLBAR};
+static const GtkIconSize small_toolbar[] = {GTK_ICON_SIZE_SMALL_TOOLBAR};
 
-static const struct icon_info icons[] =
-  {
-    {PKGDATADIR "/value-labels.png",    "pspp-value-labels"},
-    {PKGDATADIR "/weight-cases.png",    "pspp-weight-cases"},
-    {PKGDATADIR "/goto-variable.png",   "pspp-goto-variable"},
-    {PKGDATADIR "/insert-variable.png", "pspp-insert-variable"},
-    {PKGDATADIR "/insert-case.png",     "pspp-insert-case"},
-    {PKGDATADIR "/split-file.png",      "pspp-split-file"},
-    {PKGDATADIR "/select-cases.png",    "pspp-select-cases"},
-    {PKGDATADIR "/recent-dialogs.png",  "pspp-recent-dialogs"},
-    {PKGDATADIR "/nominal.png",         "var-nominal"},
-    {PKGDATADIR "/ordinal.png",         "var-ordinal"},
-    {PKGDATADIR "/scale.png",           "var-scale"},
-    {PKGDATADIR "/string.png",          "var-string"},
-    {PKGDATADIR "/date-scale.png",      "var-date-scale"}
-  };
+
+/* We currently have three icon sets viz: 16x16, 24x24 and 32x32
+   We use the 16x16 for menus, the 32x32 for the large_toolbars and 
+   the 24x24 for small_toolbars.
+
+   The order of this array is pertinent.  The icons in the sets occuring
+   earlier in the array will be used a the wildcard (default) icon size,
+   if such an icon exists.
+*/
+static const struct icon_size sizemap[] = 
+{
+  {24,  sizeof (small_toolbar) / sizeof (GtkIconSize), small_toolbar},
+  {16,  sizeof (menus) / sizeof (GtkIconSize), menus},
+  {32,  sizeof (large_toolbar) / sizeof (GtkIconSize), large_toolbar}
+};
+
 
 static void
 create_icon_factory (void)
 {
-  gint i;
+  gint c;
   GtkIconFactory *factory = gtk_icon_factory_new ();
+  struct icon_context ctx[2];
+  ctx[0] = action_icon_context;
+  ctx[1] = category_icon_context;
+  for (c = 0 ; c < 2 ; ++c)
+  {
+    const struct icon_context *ic = &ctx[c];
+    gint i;
+    for (i = 0 ; i < ic->n_icons ; ++i)
+      {
+	gboolean wildcarded = FALSE;
+	GtkIconSet *icon_set = gtk_icon_set_new ();
+	int r;
+	for (r = 0 ; r < sizeof (sizemap) / sizeof (sizemap[0]); ++r)
+	  {
+	    int s;
+	    GtkIconSource *source = gtk_icon_source_new ();
+	    gchar *filename = g_strdup_printf ("%s/%s/%dx%d/%s.png", PKGDATADIR,
+					       ic->context_name,
+					       sizemap[r].resolution, sizemap[r].resolution,
+					       ic->icon_name[i]);
+	    const char *relocated_filename = relocate (filename);
+	    GFile *gf = g_file_new_for_path (relocated_filename);
+	    if (g_file_query_exists (gf, NULL))
+	      {
+		gtk_icon_source_set_filename (source, relocated_filename);
+		if (!wildcarded)
+		  {
+		    gtk_icon_source_set_size_wildcarded (source, TRUE);
+		    wildcarded = TRUE;
+		  }
+	      }
+	    g_object_unref (gf);
 
-  for (i = 0 ; i < sizeof (icons) / sizeof(icons[0]); ++i)
-    {
-      GError *err = NULL;
-      GdkPixbuf *pixbuf =
-	gdk_pixbuf_new_from_file (relocate (icons[i].file_name), &err);
+	    for (s = 0 ; s < sizemap[r].n_sizes ; ++s)
+	      gtk_icon_source_set_size (source, sizemap[r].usage[s]);
+	    if (filename != relocated_filename)
+	      free (CONST_CAST (char *, relocated_filename));
+	    g_free (filename);
 
-      if ( pixbuf )
-	{
-	  GtkIconSet *icon_set = gtk_icon_set_new_from_pixbuf (pixbuf);
-	  g_object_unref (pixbuf);
-	  gtk_icon_factory_add ( factory, icons[i].id, icon_set);
-	}
-      else
-	{
-	  g_warning ("Cannot create icon: %s", err->message);
-	  g_clear_error (&err);
-	}
+	    if ( gtk_icon_source_get_filename (source))
+	      gtk_icon_set_add_source (icon_set, source);
+	  }
+      
+	gtk_icon_factory_add (factory, ic->icon_name[i], icon_set);
     }
+  }
+
+  {
+    struct iconmap
+    {
+      const gchar *gtk_id;
+      gchar *pspp_id;
+    };
+
+    /* We have our own icons for some things.
+       But we want the Stock Item to be identical to the Gtk standard
+       ones in all other respects.
+    */
+    const struct iconmap map[] = {
+      {GTK_STOCK_NEW,    "file-new-document"},
+      {GTK_STOCK_QUIT,   "file-quit"},
+      {GTK_STOCK_SAVE,   "file-save-document"},
+      {GTK_STOCK_CUT,    "edit-cut"},
+      {GTK_STOCK_COPY,   "edit-copy"},
+      {GTK_STOCK_PASTE,  "edit-paste"},
+      {GTK_STOCK_UNDO,   "edit-undo"},
+      {GTK_STOCK_REDO,   "edit-redo"},
+      {GTK_STOCK_DELETE, "edit-delete"},
+      {GTK_STOCK_ABOUT,  "help-about"},
+      {GTK_STOCK_PRINT,  "file-print-document"}
+    };
+
+    GtkStockItem customised[sizeof (map) / sizeof (map[0])];
+    int i;
+
+    for (i = 0; i < sizeof (map) / sizeof (map[0]); ++i)
+    {
+      gtk_stock_lookup (map[i].gtk_id, &customised[i]);
+      customised[i].stock_id =  map[i].pspp_id;
+    }
+
+
+
+    gtk_stock_add (customised, sizeof (map) / sizeof (map[0]));
+  }
 
   {
     /* Create our own "pspp-stock-reset" item, using the
        GTK_STOCK_REFRESH icon set */
-
-    GtkStockItem items[] = {
+    GtkStockItem items[2] = {
       {"pspp-stock-reset", N_("_Reset"), 0, 0, PACKAGE},
       {"pspp-stock-select", N_("_Select"), 0, 0, PACKAGE}
     };
 
-
     gtk_stock_add (items, 2);
+
     gtk_icon_factory_add (factory, "pspp-stock-reset",
 			  gtk_icon_factory_lookup_default (GTK_STOCK_REFRESH)
 			  );

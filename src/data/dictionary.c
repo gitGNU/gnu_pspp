@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 1997-9, 2000, 2006, 2007, 2009, 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 1997-9, 2000, 2006, 2007, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -363,9 +363,12 @@ dict_get_vars_mutable (const struct dictionary *d, struct variable ***vars,
 }
 
 static struct variable *
-add_var (struct dictionary *d, struct variable *v)
+add_var_with_case_index (struct dictionary *d, struct variable *v,
+                         int case_index)
 {
   struct vardict_info *vardict;
+
+  assert (case_index >= d->next_value_idx);
 
   /* Update dictionary. */
   if (d->var_cnt >= d->var_cap)
@@ -387,17 +390,23 @@ add_var (struct dictionary *d, struct variable *v)
   vardict->var = v;
   hmap_insert (&d->name_map, &vardict->name_node,
                utf8_hash_case_string (var_get_name (v), 0));
-  vardict->case_index = d->next_value_idx;
+  vardict->case_index = case_index;
   var_set_vardict (v, vardict);
 
   if ( d->changed ) d->changed (d, d->changed_data);
   if ( d->callbacks &&  d->callbacks->var_added )
     d->callbacks->var_added (d, var_get_dict_index (v), d->cb_data);
 
-  d->next_value_idx++;
   invalidate_proto (d);
+  d->next_value_idx = case_index + 1;
 
   return v;
+}
+
+static struct variable *
+add_var (struct dictionary *d, struct variable *v)
+{
+  return add_var_with_case_index (d, v, d->next_value_idx);
 }
 
 /* Creates and returns a new variable in D with the given NAME
@@ -468,6 +477,15 @@ dict_clone_var_as_assert (struct dictionary *d, const struct variable *old_var,
   return add_var (d, new_var);
 }
 
+struct variable *
+dict_clone_var_in_place_assert (struct dictionary *d,
+                                const struct variable *old_var)
+{
+  assert (dict_lookup_var (d, var_get_name (old_var)) == NULL);
+  return add_var_with_case_index (d, var_clone (old_var),
+                                  var_get_case_index (old_var));
+}
+
 /* Returns the variable named NAME in D, or a null pointer if no
    variable has that name. */
 struct variable *
@@ -529,6 +547,7 @@ static void
 reindex_var (struct dictionary *d, struct vardict_info *vardict)
 {
   struct variable *var = vardict->var;
+  struct variable *old = var_clone (var);
 
   var_set_vardict (var, vardict);
   hmap_insert_fast (&d->name_map, &vardict->name_node,
@@ -536,7 +555,8 @@ reindex_var (struct dictionary *d, struct vardict_info *vardict)
 
   if ( d->changed ) d->changed (d, d->changed_data);
   if ( d->callbacks &&  d->callbacks->var_changed )
-    d->callbacks->var_changed (d, var_get_dict_index (var), d->cb_data);
+    d->callbacks->var_changed (d, var_get_dict_index (var), VAR_TRAIT_POSITION, old, d->cb_data);
+  var_destroy (old);
 }
 
 /* Sets the case_index in V's vardict to CASE_INDEX. */
@@ -739,6 +759,7 @@ void
 dict_rename_var (struct dictionary *d, struct variable *v,
                  const char *new_name)
 {
+  struct variable *old = var_clone (v);
   assert (!utf8_strcasecmp (var_get_name (v), new_name)
           || dict_lookup_var (d, new_name) == NULL);
 
@@ -751,7 +772,9 @@ dict_rename_var (struct dictionary *d, struct variable *v,
 
   if ( d->changed ) d->changed (d, d->changed_data);
   if ( d->callbacks &&  d->callbacks->var_changed )
-    d->callbacks->var_changed (d, var_get_dict_index (v), d->cb_data);
+    d->callbacks->var_changed (d, var_get_dict_index (v), VAR_TRAIT_NAME, old, d->cb_data);
+
+  var_destroy (old);
 }
 
 /* Renames COUNT variables specified in VARS to the names given
@@ -884,7 +907,7 @@ make_hinted_name (const struct dictionary *dict, const char *hint)
           char *name;
 
           suffix[0] = '_';
-          if (!str_format_26adic (i + 1, &suffix[1], sizeof suffix - 1))
+          if (!str_format_26adic (i + 1, true, &suffix[1], sizeof suffix - 1))
             NOT_REACHED ();
 
           name = utf8_encoding_concat (root, suffix, dict->encoding, 64);
@@ -1573,10 +1596,12 @@ dict_has_attributes (const struct dictionary *d)
   return attrset_count (&d->attributes) > 0;
 }
 
-/* Called from variable.c to notify the dictionary that some property of
-   the variable has changed */
+/* Called from variable.c to notify the dictionary that some property (indicated
+   by WHAT) of the variable has changed.  OLDVAR is a copy of V as it existed
+   prior to the change.  OLDVAR is destroyed by this function.
+*/
 void
-dict_var_changed (const struct variable *v)
+dict_var_changed (const struct variable *v, unsigned int what, struct variable *oldvar)
 {
   if ( var_has_vardict (v))
     {
@@ -1588,49 +1613,12 @@ dict_var_changed (const struct variable *v)
 
       if (d->changed ) d->changed (d, d->changed_data);
       if ( d->callbacks && d->callbacks->var_changed )
-	d->callbacks->var_changed (d, var_get_dict_index (v), d->cb_data);
+	d->callbacks->var_changed (d, var_get_dict_index (v), what, oldvar, d->cb_data);
     }
+  var_destroy (oldvar);
 }
 
 
-/* Called from variable.c to notify the dictionary that the variable's width
-   has changed */
-void
-dict_var_resized (const struct variable *v, int old_width)
-{
-  if ( var_has_vardict (v))
-    {
-      const struct vardict_info *vardict = var_get_vardict (v);
-      struct dictionary *d;
-
-      d = vardict->dict;
-
-      if (d->changed) d->changed (d, d->changed_data);
-
-      invalidate_proto (d);
-      if ( d->callbacks && d->callbacks->var_resized )
-	d->callbacks->var_resized (d, var_get_dict_index (v), old_width,
-                                   d->cb_data);
-    }
-}
-
-/* Called from variable.c to notify the dictionary that the variable's display width
-   has changed */
-void
-dict_var_display_width_changed (const struct variable *v)
-{
-  if ( var_has_vardict (v))
-    {
-      const struct vardict_info *vardict = var_get_vardict (v);
-      struct dictionary *d;
-
-      d = vardict->dict;
-
-      if (d->changed) d->changed (d, d->changed_data);
-      if ( d->callbacks && d->callbacks->var_display_width_changed )
-	d->callbacks->var_display_width_changed (d, var_get_dict_index (v), d->cb_data);
-    }
-}
 
 /* Dictionary used to contain "internal variables". */
 static struct dictionary *internal_dict;

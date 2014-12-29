@@ -1,5 +1,6 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013 Free Software Foundation, Inc.
+   Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012,
+                 2013 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -45,8 +46,23 @@
 #define _(msgid) gettext (msgid)
 #define N_(msgid) (msgid)
 
-static struct spreadsheet_read_info *parse_spreadsheet (struct lexer *lexer);
-static void destroy_spreadsheet_read_info (struct spreadsheet_read_info *);
+
+#ifdef ODF_READ_SUPPORT
+static const bool odf_read_support = true;
+#else
+static const bool odf_read_support = false;
+#endif
+
+#ifdef GNM_READ_SUPPORT
+static const bool gnm_read_support = true;
+#else
+static const bool gnm_read_support = false;
+#endif
+
+static bool parse_spreadsheet (struct lexer *lexer, char **filename,
+			       struct spreadsheet_read_options *opts);
+
+static void destroy_spreadsheet_read_info (struct spreadsheet_read_options *);
 
 static int parse_get_txt (struct lexer *lexer, struct dataset *);
 static int parse_get_psql (struct lexer *lexer, struct dataset *);
@@ -55,10 +71,18 @@ int
 cmd_get_data (struct lexer *lexer, struct dataset *ds)
 {
   char *tok = NULL;
+  struct spreadsheet_read_options opts;
+  
+  opts.sheet_name = NULL;
+  opts.sheet_index = -1;
+  opts.cell_range = NULL;
+  opts.read_names = false;
+  opts.asw = -1;
+
   lex_force_match (lexer, T_SLASH);
 
   if (!lex_force_match_id (lexer, "TYPE"))
-    return CMD_FAILURE;
+    goto error;
 
   lex_force_match (lexer, T_EQUALS);
 
@@ -76,31 +100,49 @@ cmd_get_data (struct lexer *lexer, struct dataset *ds)
   else if (lex_match_id (lexer, "GNM") || 
       lex_match_id (lexer, "ODS"))
     {
+      char *filename = NULL;
       struct casereader *reader = NULL;
       struct dictionary *dict = NULL;
-      struct spreadsheet_read_info *sri = parse_spreadsheet (lexer);
-      if (NULL == sri)
+
+      if (!parse_spreadsheet (lexer, &filename, &opts))
 	goto error;
 
-      if ( 0 == strncasecmp (tok, "GNM", 3))
-	reader = gnumeric_open_reader (sri, &dict);
-      else if (0 == strncasecmp (tok, "ODS", 3))
-	reader = ods_open_reader (sri, &dict);
+      if ( gnm_read_support && 0 == strncasecmp (tok, "GNM", 3))
+	{
+	  struct spreadsheet *spreadsheet = gnumeric_probe (filename, true);
+	  if (spreadsheet == NULL)
+	    goto error;
+	  reader = gnumeric_make_reader (spreadsheet, &opts);
+	  dict = spreadsheet->dict;
+	  gnumeric_destroy (spreadsheet);
+	}
+      else if ( odf_read_support && 0 == strncasecmp (tok, "ODS", 3))
+	{
+	  struct spreadsheet *spreadsheet = ods_probe (filename, true);
+	  if (spreadsheet == NULL)
+	    goto error;
+	  reader = ods_make_reader (spreadsheet, &opts);
+	  dict = spreadsheet->dict;
+	  ods_destroy (spreadsheet);
+	}
+
+      free (filename);
 
       if (reader)
 	{
 	  dataset_set_dict (ds, dict);
 	  dataset_set_source (ds, reader);
-	  destroy_spreadsheet_read_info (sri);
 	  free (tok);
+	  destroy_spreadsheet_read_info (&opts);
 	  return CMD_SUCCESS;
 	}
-      destroy_spreadsheet_read_info (sri);
     }
   else
     msg (SE, _("Unsupported TYPE %s."), tok);
 
+
  error:
+  destroy_spreadsheet_read_info (&opts);
   free (tok);
   return CMD_FAILURE;
 }
@@ -181,13 +223,15 @@ parse_get_psql (struct lexer *lexer, struct dataset *ds)
   return CMD_FAILURE;
 }
 
-static struct spreadsheet_read_info *
-parse_spreadsheet (struct lexer *lexer)
+static bool
+parse_spreadsheet (struct lexer *lexer, char **filename, 
+		   struct spreadsheet_read_options *opts)
 {
-  struct spreadsheet_read_info *sri = xzalloc (sizeof *sri);
-  sri->sheet_index = 1;
-  sri->read_names = true;
-  sri->asw = -1;
+  opts->sheet_index = 1;
+  opts->sheet_name = NULL;
+  opts->cell_range = NULL;
+  opts->read_names = true;
+  opts->asw = -1;
 
   lex_force_match (lexer, T_SLASH);
 
@@ -199,7 +243,7 @@ parse_spreadsheet (struct lexer *lexer)
   if (!lex_force_string (lexer))
     goto error;
 
-  sri->file_name = utf8_to_filename (lex_tokcstr (lexer));
+  *filename  = utf8_to_filename (lex_tokcstr (lexer));
 
   lex_get (lexer);
 
@@ -208,7 +252,7 @@ parse_spreadsheet (struct lexer *lexer)
       if ( lex_match_id (lexer, "ASSUMEDSTRWIDTH"))
 	{
 	  lex_match (lexer, T_EQUALS);
-	  sri->asw = lex_integer (lexer);
+	  opts->asw = lex_integer (lexer);
 	  lex_get (lexer);
 	}
       else if (lex_match_id (lexer, "SHEET"))
@@ -219,15 +263,15 @@ parse_spreadsheet (struct lexer *lexer)
 	      if ( ! lex_force_string (lexer) )
 		goto error;
 
-	      sri->sheet_name = ss_xstrdup (lex_tokss (lexer));
-	      sri->sheet_index = -1;
+	      opts->sheet_name = ss_xstrdup (lex_tokss (lexer));
+	      opts->sheet_index = -1;
 
 	      lex_get (lexer);
 	    }
 	  else if (lex_match_id (lexer, "INDEX"))
 	    {
-	      sri->sheet_index = lex_integer (lexer);
-	      if (sri->sheet_index <= 0)
+	      opts->sheet_index = lex_integer (lexer);
+	      if (opts->sheet_index <= 0)
 		{
 		  msg (SE, _("The sheet index must be greater than or equal to 1"));
 		  goto error;
@@ -247,14 +291,14 @@ parse_spreadsheet (struct lexer *lexer)
 
 	  if (lex_match_id (lexer, "FULL"))
 	    {
-	      sri->cell_range = NULL;
+	      opts->cell_range = NULL;
 	    }
 	  else if (lex_match_id (lexer, "RANGE"))
 	    {
 	      if ( ! lex_force_string (lexer) )
 		goto error;
 
-	      sri->cell_range = ss_xstrdup (lex_tokss (lexer));
+	      opts->cell_range = ss_xstrdup (lex_tokss (lexer));
 	      lex_get (lexer);
 	    }
 	  else
@@ -270,11 +314,11 @@ parse_spreadsheet (struct lexer *lexer)
 
 	  if ( lex_match_id (lexer, "ON"))
 	    {
-	      sri->read_names = true;
+	      opts->read_names = true;
 	    }
 	  else if (lex_match_id (lexer, "OFF"))
 	    {
-	      sri->read_names = false;
+	      opts->read_names = false;
 	    }
 	  else
 	    {
@@ -290,11 +334,10 @@ parse_spreadsheet (struct lexer *lexer)
 	}
     }
 
-  return sri;
+  return true;
 
  error:
-  destroy_spreadsheet_read_info (sri);
-  return NULL;
+  return false;
 }
 
 
@@ -390,7 +433,7 @@ parse_get_txt (struct lexer *lexer, struct dataset *ds)
             goto error;
           if (lex_integer (lexer) < 1)
             {
-              msg (SE, _("Value of FIRSTCASE must be 1 or greater."));
+              msg (SE, _("Value of %s must be 1 or greater."), "FIRSTCASE");
               goto error;
             }
           data_parser_set_skip (parser, lex_integer (lexer) - 1);
@@ -428,7 +471,7 @@ parse_get_txt (struct lexer *lexer, struct dataset *ds)
             goto error;
           if (lex_integer (lexer) < 1)
             {
-              msg (SE, _("Value of FIXCASE must be at least 1."));
+              msg (SE, _("Value of %s must be 1 or greater."), "FIXCASE");
               goto error;
             }
           data_parser_set_records (parser, lex_integer (lexer));
@@ -448,7 +491,7 @@ parse_get_txt (struct lexer *lexer, struct dataset *ds)
                 goto error;
               if (lex_integer (lexer) < 1)
                 {
-                  msg (SE, _("Value of FIRST must be at least 1."));
+                  msg (SE, _("Value of %s must be 1 or greater."), "FIRST");
                   goto error;
                 }
               data_parser_set_case_limit (parser, lex_integer (lexer));
@@ -460,7 +503,7 @@ parse_get_txt (struct lexer *lexer, struct dataset *ds)
                 goto error;
               if (lex_integer (lexer) < 1 || lex_integer (lexer) > 100)
                 {
-                  msg (SE, _("Value of PERCENT must be between 1 and 100."));
+                  msg (SE, _("Value of %s must be between 1 and 100."), "PERCENT");
                   goto error;
                 }
               data_parser_set_case_percent (parser, lex_integer (lexer));
@@ -657,13 +700,8 @@ parse_get_txt (struct lexer *lexer, struct dataset *ds)
 
 
 static void 
-destroy_spreadsheet_read_info (struct spreadsheet_read_info *sri)
+destroy_spreadsheet_read_info (struct spreadsheet_read_options *opts)
 {
-  if ( NULL == sri)
-    return;
-
-  free (sri->sheet_name);
-  free (sri->cell_range);
-  free (sri->file_name);
-  free (sri);
+  free (opts->cell_range);
+  free (opts->sheet_name);
 }

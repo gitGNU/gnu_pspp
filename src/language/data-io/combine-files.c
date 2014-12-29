@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 1997-9, 2000, 2006, 2007, 2008, 2009, 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 1997-9, 2000, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -229,7 +229,8 @@ combine_files (enum comb_command_type command,
           if (file->handle == NULL)
             goto error;
 
-          file->reader = any_reader_open (file->handle, NULL, &file->dict);
+          file->reader = any_reader_open_and_decode (file->handle, NULL,
+                                                     &file->dict, NULL);
           if (file->reader == NULL)
             goto error;
         }
@@ -264,7 +265,8 @@ combine_files (enum comb_command_type command,
             saw_sort = true;
           }
 
-      merge_dictionary (proc.dict, file);
+      if (!merge_dictionary (proc.dict, file))
+        goto error;
     }
 
   while (lex_token (lexer) != T_ENDCMD)
@@ -444,7 +446,7 @@ combine_files (enum comb_command_type command,
           if (active_file == NULL)
             {
               proc_discard_output (ds);
-              file->reader = active_file = proc_open (ds);
+              file->reader = active_file = proc_open_filtering (ds, false);
             }
           else
             file->reader = casereader_clone (active_file);
@@ -554,8 +556,10 @@ merge_dictionary (struct dictionary *const m, struct comb_file *f)
           if (var_get_width (mv) != var_get_width (dv))
             {
               const char *var_name = var_get_name (dv);
-              const char *file_name = fh_get_name (f->handle);
               struct string s = DS_EMPTY_INITIALIZER;
+              const char *file_name;
+
+              file_name = f->handle ? fh_get_name (f->handle) : "*";
               ds_put_format (&s,
                              _("Variable %s in file %s has different "
                                "type or width from the same variable in "
@@ -587,7 +591,7 @@ merge_dictionary (struct dictionary *const m, struct comb_file *f)
           if (var_has_missing_values (dv) && !var_has_missing_values (mv))
             var_set_missing_values (mv, var_get_missing_values (dv));
           if (var_get_label (dv) && !var_get_label (mv))
-            var_set_label (mv, var_get_label (dv), false);
+            var_set_label (mv, var_get_label (dv));
         }
       else
         mv = dict_clone_var_assert (m, dv);

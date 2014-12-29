@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 1997-9, 2000, 2009, 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 1997-9, 2000, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -22,6 +22,24 @@
 #include "data/dict-class.h"
 #include "data/missing-values.h"
 #include "data/val-type.h"
+
+/* Bitfields to identify traits of a variable */
+
+#define VAR_TRAIT_NAME             0x0001
+#define VAR_TRAIT_WIDTH            0x0002
+#define VAR_TRAIT_ROLE             0x0004
+#define VAR_TRAIT_LABEL            0x0008
+#define VAR_TRAIT_VALUE_LABELS     0x0010
+#define VAR_TRAIT_MISSING_VALUES   0x0020
+#define VAR_TRAIT_ALIGNMENT        0x0040
+#define VAR_TRAIT_MEASURE          0x0080
+#define VAR_TRAIT_DISPLAY_WIDTH    0x0100
+#define VAR_TRAIT_LEAVE            0x0200
+#define VAR_TRAIT_POSITION         0x0400
+#define VAR_TRAIT_ATTRIBUTES       0x0800
+#define VAR_TRAIT_PRINT_FORMAT     0x1000
+#define VAR_TRAIT_WRITE_FORMAT     0x2000
+
 
 union value;
 
@@ -46,10 +64,14 @@ unsigned hash_var_ptr_by_name (const void *, const void *);
 
 int compare_var_ptrs_by_dict_index (const void *, const void *, const void *);
 
+struct fmt_spec;
+
 /* Types and widths of values associated with a variable. */
 enum val_type var_get_type (const struct variable *);
 int var_get_width (const struct variable *);
 void var_set_width (struct variable *, int width);
+void var_set_width_and_formats (struct variable *v, int new_width,
+				const struct fmt_spec *print, const struct fmt_spec *write);
 
 bool var_is_numeric (const struct variable *);
 bool var_is_alpha (const struct variable *);
@@ -98,7 +120,7 @@ struct fmt_spec var_default_formats (int width);
 /* Variable labels. */
 const char *var_to_string (const struct variable *);
 const char *var_get_label (const struct variable *);
-bool var_set_label (struct variable *, const char *label, bool issue_warning);
+void var_set_label (struct variable *, const char *label);
 void var_clear_label (struct variable *);
 bool var_has_label (const struct variable *);
 
@@ -113,11 +135,30 @@ enum measure
 
 bool measure_is_valid (enum measure);
 const char *measure_to_string (enum measure);
+const char *measure_to_syntax (enum measure);
 
 enum measure var_get_measure (const struct variable *);
 void var_set_measure (struct variable *, enum measure);
 
 enum measure var_default_measure (enum val_type);
+
+/* Intended usage of a variable, for populating dialogs. */
+enum var_role
+  {
+    ROLE_INPUT,
+    ROLE_TARGET,
+    ROLE_BOTH,
+    ROLE_NONE,
+    ROLE_PARTITION,
+    ROLE_SPLIT
+  };
+
+bool var_role_is_valid (enum var_role);
+const char *var_role_to_string (enum var_role);
+const char *var_role_to_syntax (enum var_role);
+
+enum var_role var_get_role (const struct variable *);
+void var_set_role (struct variable *, enum var_role);
 
 /* GUI display width. */
 int var_get_display_width (const struct variable *);
@@ -135,6 +176,7 @@ enum alignment
 
 bool alignment_is_valid (enum alignment);
 const char *alignment_to_string (enum alignment);
+const char *alignment_to_syntax (enum alignment);
 
 enum alignment var_get_alignment (const struct variable *);
 void var_set_alignment (struct variable *, enum alignment);

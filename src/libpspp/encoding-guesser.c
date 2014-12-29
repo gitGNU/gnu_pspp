@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 2011, 2012, 2013 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -43,19 +43,15 @@
 const char *
 encoding_guess_parse_encoding (const char *encoding)
 {
-  const char *fallback;
-
   if (encoding == NULL
       || !c_strcasecmp (encoding, "auto")
       || !c_strcasecmp (encoding, "auto,locale")
       || !c_strcasecmp (encoding, "locale"))
-    fallback = locale_charset ();
+    return locale_charset ();
   else if (!c_strncasecmp (encoding, "auto,", 5))
-    fallback = encoding + 5;
+    return encoding + 5;
   else
     return encoding;
-
-  return is_encoding_utf8 (fallback) ? "windows-1252" : fallback;
 }
 
 /* Returns true if ENCODING, which must be in one of the forms described at the
@@ -187,6 +183,36 @@ is_all_utf8_text (const void *s_, size_t n)
   return true;
 }
 
+static bool
+is_utf8_bom (const uint8_t *data, size_t n)
+{
+  return n >= 3 && data[0] == 0xef && data[1] == 0xbb && data[2] == 0xbf;
+}
+
+static bool
+is_utf16le_bom (const uint8_t *data, size_t n)
+{
+  return (n >= ENCODING_GUESS_MIN || n % 2 == 0) && get_le16 (data) == 0xfeff;
+}
+
+static bool
+is_utf16be_bom (const uint8_t *data, size_t n)
+{
+  return (n >= ENCODING_GUESS_MIN || n % 2 == 0) && get_be16 (data) == 0xfeff;
+}
+
+static bool
+is_utf32le_bom (const uint8_t *data, size_t n)
+{
+  return (n >= ENCODING_GUESS_MIN || n % 4 == 0) && get_le32 (data) == 0xfeff;
+}
+
+static bool
+is_utf32be_bom (const uint8_t *data, size_t n)
+{
+  return (n >= ENCODING_GUESS_MIN || n % 4 == 0) && get_be32 (data) == 0xfeff;
+}
+
 /* Attempts to guess the encoding of a text file based on ENCODING, an encoding
    name in one of the forms described at the top of encoding-guesser.h, and
    DATA, which contains the first N bytes of the file.  Returns the guessed
@@ -220,8 +246,7 @@ encoding_guess_head_encoding (const char *encoding,
   if (n == 0)
     return fallback_encoding;
 
-  if ((n >= ENCODING_GUESS_MIN || n % 4 == 0)
-      && (get_be32 (data) == 0xfeff || get_le32 (data) == 0xfeff))
+  if (is_utf32be_bom (data, n) || is_utf32le_bom (data, n))
     return "UTF-32";
 
   if (n >= 4)
@@ -233,11 +258,10 @@ encoding_guess_head_encoding (const char *encoding,
         return "UTF-EBCDIC";
     }
 
-  if ((n >= ENCODING_GUESS_MIN || n % 2 == 0)
-      && (get_be16 (data) == 0xfeff || get_le16 (data) == 0xfeff))
+  if (is_utf16be_bom (data, n) || is_utf16le_bom (data, n))
     return "UTF-16";
 
-  if (n >= 3 && data[0] == 0xef && data[1] == 0xbb && data[2] == 0xbf)
+  if (is_utf8_bom (data, n))
     return "UTF-8";
 
   guess = guess_utf16 (data, n);
@@ -249,11 +273,60 @@ encoding_guess_head_encoding (const char *encoding,
   if (is_utf32 (data, n, get_le32))
     return "UTF-32LE";
 
-  if (!is_encoding_ascii_compatible (fallback_encoding)
-      || !encoding_guess_tail_is_utf8 (data, n))
+  /* We've tried all the "giveaways" that make the encoding obvious.  That
+     rules out, incidentally, all the encodings with multibyte units
+     (e.g. UTF-16, UTF-32).  Our remaining goal is to try to distinguish UTF-8
+     from some ASCII-based fallback encoding. */
+
+  /* If the fallback encoding isn't ASCII compatible, give up. */
+  if (!is_encoding_ascii_compatible (fallback_encoding))
     return fallback_encoding;
 
+  /* If the data we have clearly is not UTF-8, give up. */
+  if (!encoding_guess_tail_is_utf8 (data, n))
+    {
+      /* If the fallback encoding is UTF-8, fall back on something else.*/
+      if (is_encoding_utf8 (fallback_encoding))
+        return "windows-1252";
+
+      return fallback_encoding;
+    }
+
   return "ASCII";
+}
+
+static bool
+is_encoding_utf16 (const char *encoding)
+{
+  return (!c_strcasecmp (encoding, "utf-16")
+          || !c_strcasecmp (encoding, "utf16"));
+}
+
+static bool
+is_encoding_utf32 (const char *encoding)
+{
+  return (!c_strcasecmp (encoding, "utf-32")
+          || !c_strcasecmp (encoding, "utf32"));
+}
+
+/* If ENCODING is the name of an encoding that could begin with a byte-order
+   mark, and in fact the N bytes in DATA do begin with a byte-order mark,
+   returns the number of bytes in the byte-order mark.  Otherwise, returns 0.
+
+   N must be at least ENCODING_GUESS_MIN, unless the file is shorter than
+   that. */
+size_t
+encoding_guess_bom_length (const char *encoding,
+                           const void *data_, size_t n)
+{
+  const uint8_t *data = data_;
+
+  return (is_utf8_bom (data, n) && is_encoding_utf8 (encoding) ? 3
+          : is_utf16le_bom (data, n) && is_encoding_utf16 (encoding) ? 2
+          : is_utf16be_bom (data, n) && is_encoding_utf16 (encoding) ? 2
+          : is_utf32le_bom (data, n) && is_encoding_utf32 (encoding) ? 4
+          : is_utf32be_bom (data, n) && is_encoding_utf32 (encoding) ? 4
+          : 0);
 }
 
 /* Returns an encoding guess based on ENCODING and the N bytes of text starting
@@ -271,9 +344,21 @@ const char *
 encoding_guess_tail_encoding (const char *encoding,
                               const void *data, size_t n)
 {
-  return (encoding_guess_tail_is_utf8 (data, n) != 0
-          ? "UTF-8"
-          : encoding_guess_parse_encoding (encoding));
+
+  if (encoding_guess_tail_is_utf8 (data, n) != 0)
+    return "UTF-8";
+  else
+    {
+      /* The data is not UTF-8. */
+      const char *fallback_encoding = encoding_guess_parse_encoding (encoding);
+
+      /* If the fallback encoding is UTF-8, fall back on something else.*/
+      if (is_encoding_utf8 (fallback_encoding))
+        return "windows-1252";
+
+      return fallback_encoding;
+    }
+
 }
 
 /* Returns an encoding guess based on ENCODING and the N bytes of text starting

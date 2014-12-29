@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 1997-9, 2000, 2009, 2010, 2011 Free Software Foundation, Inc.
+   Copyright (C) 1997-9, 2000, 2009, 2010, 2011, 2013 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -68,7 +68,7 @@ struct flip_pgm
     int n_cases;                /* Pre-flip number of cases. */
 
     struct variable *new_names_var; /* Variable with new variable names. */
-    struct dictionary *dict;     /* Dictionary of the names */
+    const char *encoding;           /* Variable names' encoding. */
     struct var_names old_names; /* Variable names before FLIP. */
     struct var_names new_names; /* Variable names after FLIP. */
 
@@ -87,7 +87,8 @@ static void make_new_var (struct dictionary *, const char *name);
 int
 cmd_flip (struct lexer *lexer, struct dataset *ds)
 {
-  struct dictionary *dict = dataset_dict (ds);
+  struct dictionary *old_dict = dataset_dict (ds);
+  struct dictionary *new_dict = NULL;
   const struct variable **vars;
   struct flip_pgm *flip;
   struct casereader *input, *reader;
@@ -96,8 +97,8 @@ cmd_flip (struct lexer *lexer, struct dataset *ds)
   bool ok;
 
   if (proc_make_temporary_transformations_permanent (ds))
-    msg (SW, _("FLIP ignores TEMPORARY.  "
-               "Temporary transformations will be made permanent."));
+    msg (SW, _("%s ignores %s.  "
+               "Temporary transformations will be made permanent."), "FLIP", "TEMPORARY");
 
   flip = pool_create_container (struct flip_pgm, pool);
   flip->n_vars = 0;
@@ -108,31 +109,30 @@ cmd_flip (struct lexer *lexer, struct dataset *ds)
   flip->file = NULL;
   flip->cases_read = 0;
   flip->error = false;
-  flip->dict = dict;
 
   lex_match (lexer, T_SLASH);
   if (lex_match_id (lexer, "VARIABLES"))
     {
       lex_match (lexer, T_EQUALS);
-      if (!parse_variables_const (lexer, dict, &vars, &flip->n_vars,
+      if (!parse_variables_const (lexer, old_dict, &vars, &flip->n_vars,
                                   PV_NO_DUPLICATE))
 	goto error;
       lex_match (lexer, T_SLASH);
     }
   else
-    dict_get_vars (dict, &vars, &flip->n_vars, DC_SYSTEM);
+    dict_get_vars (old_dict, &vars, &flip->n_vars, DC_SYSTEM);
   pool_register (flip->pool, free, vars);
 
   lex_match (lexer, T_SLASH);
   if (lex_match_id (lexer, "NEWNAMES"))
     {
       lex_match (lexer, T_EQUALS);
-      flip->new_names_var = parse_variable (lexer, dict);
+      flip->new_names_var = parse_variable (lexer, old_dict);
       if (!flip->new_names_var)
         goto error;
     }
   else
-    flip->new_names_var = dict_lookup_var (dict, "CASE_LBL");
+    flip->new_names_var = dict_lookup_var (old_dict, "CASE_LBL");
 
   if (flip->new_names_var)
     {
@@ -148,7 +148,7 @@ cmd_flip (struct lexer *lexer, struct dataset *ds)
   flip->file = pool_create_temp_file (flip->pool);
   if (flip->file == NULL)
     {
-      msg (SE, _("Could not create temporary file for FLIP."));
+      msg (SE, _("Could not create temporary file for %s."), "FLIP");
       goto error;
     }
 
@@ -161,7 +161,12 @@ cmd_flip (struct lexer *lexer, struct dataset *ds)
   /* Read the active dataset into a flip_sink. */
   proc_discard_output (ds);
 
-  input = proc_open (ds);
+  /* Save old dictionary. */
+  new_dict = dict_clone (old_dict);
+  flip->encoding = dict_get_encoding (new_dict);
+  dict_clear (new_dict);
+
+  input = proc_open_filtering (ds, false);
   while ((c = casereader_read (input)) != NULL)
     {
       flip->n_cases++;
@@ -185,8 +190,9 @@ cmd_flip (struct lexer *lexer, struct dataset *ds)
             }
           else
             {
-              name = data_out_pool (value, dict_get_encoding (flip->dict), var_get_write_format (flip->new_names_var),
-		 flip->pool);
+              name = data_out_pool (value, dict_get_encoding (old_dict),
+                                    var_get_write_format (flip->new_names_var),
+                                    flip->pool);
             }
           var_names_add (flip->pool, &flip->new_names, name);
         }
@@ -203,26 +209,27 @@ cmd_flip (struct lexer *lexer, struct dataset *ds)
     }
 
   /* Flip the dictionary. */
-  dict_clear (dict);
-  dict_create_var_assert (dict, "CASE_LBL", 8);
+  dict_create_var_assert (new_dict, "CASE_LBL", 8);
   for (i = 0; i < flip->n_cases; i++)
     if (flip->new_names.n_names)
-      make_new_var (dict, flip->new_names.names[i]);
+      make_new_var (new_dict, flip->new_names.names[i]);
     else
       {
         char s[3 + INT_STRLEN_BOUND (i) + 1];
         sprintf (s, "VAR%03zu", i);
-        dict_create_var_assert (dict, s, 0);
+        dict_create_var_assert (new_dict, s, 0);
       }
 
   /* Set up flipped data for reading. */
-  reader = casereader_create_sequential (NULL, dict_get_proto (dict),
+  reader = casereader_create_sequential (NULL, dict_get_proto (new_dict),
                                          flip->n_vars,
                                          &flip_casereader_class, flip);
+  dataset_set_dict (ds, new_dict);
   dataset_set_source (ds, reader);
   return CMD_SUCCESS;
 
  error:
+  dict_destroy (new_dict);
   destroy_flip_pgm (flip);
   return CMD_CASCADING_FAILURE;
 }
@@ -323,14 +330,14 @@ flip_file (struct flip_pgm *flip)
   input_file = flip->file;
   if (fseeko (input_file, 0, SEEK_SET) != 0)
     {
-      msg (SE, _("Error rewinding FLIP file: %s."), strerror (errno));
+      msg (SE, _("Error rewinding %s file: %s."), "FLIP", strerror (errno));
       return false;
     }
 
   output_file = pool_create_temp_file (flip->pool);
   if (output_file == NULL)
     {
-      msg (SE, _("Error creating FLIP source file."));
+      msg (SE, _("Error creating %s source file."), "FLIP");
       return false;
     }
 
@@ -343,9 +350,9 @@ flip_file (struct flip_pgm *flip)
       if (read_cases != fread (input_buf, case_bytes, read_cases, input_file))
         {
           if (ferror (input_file))
-            msg (SE, _("Error reading FLIP file: %s."), strerror (errno));
+            msg (SE, _("Error reading %s file: %s."), "FLIP", strerror (errno));
           else
-            msg (SE, _("Unexpected end of file reading FLIP file."));
+            msg (SE, _("Unexpected end of file reading %s file."), "FLIP");
           return false;
         }
 
@@ -361,7 +368,7 @@ flip_file (struct flip_pgm *flip)
                                            + (off_t) i * flip->n_cases),
                       SEEK_SET) != 0)
             {
-              msg (SE, _("Error seeking FLIP source file: %s."),
+              msg (SE, _("Error seeking %s source file: %s."), "FLIP",
                    strerror (errno));
               return false;
             }
@@ -369,7 +376,7 @@ flip_file (struct flip_pgm *flip)
 	  if (fwrite (output_buf, sizeof *output_buf, read_cases, output_file)
 	      != read_cases)
             {
-              msg (SE, _("Error writing FLIP source file: %s."),
+              msg (SE, _("Error writing %s source file: %s."), "FLIP",
                    strerror (errno));
               return false;
             }
@@ -384,7 +391,7 @@ flip_file (struct flip_pgm *flip)
 
   if (fseeko (output_file, 0, SEEK_SET) != 0)
     {
-      msg (SE, _("Error rewinding FLIP source file: %s."), strerror (errno));
+      msg (SE, _("Error rewinding %s source file: %s."), "FLIP", strerror (errno));
       return false;
     }
   flip->file = output_file;
@@ -398,7 +405,6 @@ static struct ccase *
 flip_casereader_read (struct casereader *reader, void *flip_)
 {
   struct flip_pgm *flip = flip_;
-  const char *encoding;
   struct ccase *c;
   size_t i;
 
@@ -406,9 +412,8 @@ flip_casereader_read (struct casereader *reader, void *flip_)
     return false;
 
   c = case_create (casereader_get_proto (reader));
-  encoding = dict_get_encoding (flip->dict);
-  data_in (ss_cstr (flip->old_names.names[flip->cases_read]), encoding,
-           FMT_A, case_data_rw_idx (c, 0), 8, encoding);
+  data_in (ss_cstr (flip->old_names.names[flip->cases_read]), flip->encoding,
+           FMT_A, case_data_rw_idx (c, 0), 8, flip->encoding);
 
   for (i = 0; i < flip->n_cases; i++)
     {
@@ -417,10 +422,10 @@ flip_casereader_read (struct casereader *reader, void *flip_)
         {
           case_unref (c);
           if (ferror (flip->file))
-            msg (SE, _("Error reading FLIP temporary file: %s."),
+            msg (SE, _("Error reading %s temporary file: %s."), "FLIP",
                  strerror (errno));
           else if (feof (flip->file))
-            msg (SE, _("Unexpected end of file reading FLIP temporary file."));
+            msg (SE, _("Unexpected end of file reading %s temporary file."), "FLIP");
           else
             NOT_REACHED ();
           flip->error = true;

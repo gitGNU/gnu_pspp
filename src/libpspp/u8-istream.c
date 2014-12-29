@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -122,17 +122,26 @@ u8_istream_for_fd (const char *fromcode, int fd)
 
   encoding = encoding_guess_head_encoding (fromcode, is->buffer, is->length);
   if (is_encoding_utf8 (encoding))
-    is->state = S_UTF8;
+    {
+      unsigned int bom_len;
+
+      is->state = S_UTF8;
+      bom_len = encoding_guess_bom_length (encoding, is->buffer, is->length);
+      is->head += bom_len;
+      is->length -= bom_len;
+    }
   else
     {
       if (encoding_guess_encoding_is_auto (fromcode)
           && !strcmp (encoding, "ASCII"))
-        is->state = S_AUTO;
+        {
+          is->state = S_AUTO;
+          encoding = encoding_guess_parse_encoding (fromcode);
+        }
       else
         is->state = S_CONVERT;
 
-      is->converter = iconv_open ("UTF-8",
-                                  encoding_guess_parse_encoding (fromcode));
+      is->converter = iconv_open ("UTF-8", encoding);
       if (is->converter == (iconv_t) -1)
         goto error;
     }
@@ -194,14 +203,22 @@ fill_buffer (struct u8_istream *is)
   is->head = is->buffer;
 
   /* Read more input. */
+  n = 0;
   do
     {
-      n = read (is->fd, is->buffer + is->length,
-                U8_ISTREAM_BUFFER_SIZE - is->length);
+      ssize_t retval = read (is->fd, is->buffer + is->length,
+                             U8_ISTREAM_BUFFER_SIZE - is->length);
+      if (retval > 0)
+        {
+          n += retval;
+          is->length += retval;
+        }
+      else if (retval == 0)
+        return n;
+      else if (errno != EINTR)
+        return n > 0 ? n : -1;
     }
-  while (n < 0 && errno == EINTR);
-  if (n > 0)
-    is->length += n;
+  while (is->length < U8_ISTREAM_BUFFER_SIZE);
   return n;
 }
 

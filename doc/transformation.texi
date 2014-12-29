@@ -519,7 +519,7 @@ The source values are used to specify the values in the dataset which
 need to change, and the destination value specifies the new value
 to which they should be changed.
 Each @var{src_value} may take one of the following forms:
-@itemize @bullet
+@table @asis
 @item @var{number}
 If the source variables are numeric then @var{src_value} may be a literal
 number.
@@ -528,11 +528,9 @@ If the source variables are string variables then @var{src_value} may be a
 literal string (like all strings, enclosed in single or double quotes).
 @item @var{num1} THRU @var{num2}
 This form is valid only when the source variables are numeric.
-It specifies all values in the range [@var{num1}, @var{num2}].
-Normally you would ensure that @var{num2} is greater than or equal to
-@var{num1}.
-If @var{num1} however is greater than @var{num2}, then the range 
-[@var{num2},@var{num1}] will be used instead.
+It specifies all values in the range between @var{num1} and @var{num2},
+including both endpoints of the range.  By convention, @var{num1}
+should be less than @var{num2}.
 Open-ended ranges may be specified using @samp{LO} or @samp{LOWEST} 
 for @var{num1}
 or @samp{HI} or @samp{HIGHEST} for @var{num2}.
@@ -549,11 +547,11 @@ The @samp{ELSE} keyword may be used to match any values which are
 not matched by any other @var{src_value} appearing in the command.
 If this keyword appears, it should be used in the last mapping of the 
 command.
-@end itemize
+@end table
 
 After the source variables comes an @samp{=} and then the @var{dest_value}.
 The @var{dest_value} may take any of the following forms:
-@itemize @bullet
+@table @asis
 @item @var{number}
 A literal numeric value to which the source values should be changed.
 This implies the destination variable must be numeric.
@@ -569,7 +567,7 @@ The special keyword @samp{COPY} means that the source value should not be
 modified, but
 copied directly to the destination value.
 This is meaningful only if @samp{INTO @var{dest_vars}} is specified.
-@end itemize
+@end table
 
 Mappings are considered from left to right.
 Therefore, if a value is matched by a @var{src_value} from more than 
@@ -581,13 +579,17 @@ The behaviour of the command is slightly different depending on whether it
 appears or not.
 
 If @samp{INTO @var{dest_vars}} does not appear, then values will be recoded
-``in place´´.  This means that the recoded values are written back to the
+``in place''.
+This means that the recoded values are written back to the
 source variables from whence the original values came.
 In this case, the @var{dest_value} for every mapping must imply a value which
 has the same type as the @var{src_value}.
 For example, if the source value is a string value, it is not permissible for
 @var{dest_value} to be @samp{SYSMIS} or another forms which implies a numeric
 result.
+It is also not permissible for @var{dest_value} to be  longer than the width
+of the source variable.
+
 The following example two numeric variables @var{x} and @var{y} are recoded
 in place.
 Zero is recoded to 99, the values 1 to 10 inclusive are unchanged,
@@ -670,7 +672,7 @@ recode
 @end example
 @noindent Here we have two recodings. The first affects the source variable
 @var{a} and recodes in-place the value 2 into 22 and all other values to 99.
-The second recoding copies the values of @var{b} into the the variable @var{z}, 
+The second recoding copies the values of @var{b} into the variable @var{z}, 
 changing any instances of 1 into 3.
 
 @node SORT CASES

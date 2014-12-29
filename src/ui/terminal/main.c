@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 1997-2000, 2006-2007, 2009-2012 Free Software Foundation, Inc.
+   Copyright (C) 1997-2000, 2006-2007, 2009-2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -90,13 +90,14 @@ main (int argc, char **argv)
   fpu_init ();
   gsl_set_error_handler_off ();
 
+  output_engine_push ();
   fh_init ();
   settings_init ();
   terminal_check_size ();
   random_init ();
 
   lexer = lex_create ();
-  the_session = session_create ();
+  the_session = session_create (NULL);
   dataset_create (the_session, "");
 
   parser = argv_parser_create ();
@@ -147,7 +148,7 @@ main (int argc, char **argv)
               lex_discard_noninteractive (lexer);
             }
           else if (result == CMD_CASCADING_FAILURE
-                   && lex_get_error_mode (lexer) != LEX_ERROR_INTERACTIVE)
+                   && lex_get_error_mode (lexer) != LEX_ERROR_TERMINAL)
             {
               msg (SE, _("Stopping syntax file processing here to avoid "
                          "a cascade of dependent command failures."));
@@ -166,7 +167,7 @@ main (int argc, char **argv)
   settings_done ();
   fh_done ();
   lex_destroy (lexer);
-  output_close ();
+  output_engine_pop ();
   i18n_done ();
 
   return msg_ui_any_errors ();

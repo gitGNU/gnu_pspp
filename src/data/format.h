@@ -96,7 +96,7 @@ bool fmt_check_width_compat (const struct fmt_spec *, int var_width);
 int fmt_var_width (const struct fmt_spec *);
 char *fmt_to_string (const struct fmt_spec *, char s[FMT_STRING_LEN_MAX + 1]);
 bool fmt_equal (const struct fmt_spec *, const struct fmt_spec *);
-void fmt_resize (struct fmt_spec *, int new_width);
+bool fmt_resize (struct fmt_spec *, int new_width);
 
 void fmt_fix (struct fmt_spec *, enum fmt_use);
 void fmt_fix_input (struct fmt_spec *);
@@ -185,5 +185,8 @@ int fmt_affix_width (const struct fmt_number_style *);
 int fmt_neg_affix_width (const struct fmt_number_style *);
 
 extern const struct fmt_spec F_8_0 ;
+extern const struct fmt_spec F_8_2 ;
+extern const struct fmt_spec F_4_3 ;
+extern const struct fmt_spec F_5_1 ;
 
 #endif /* data/format.h */

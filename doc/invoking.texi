@@ -302,6 +302,16 @@ Specify @code{none} to disable chart output.  Charts are always
 disabled if your installation of @pspp{} was compiled without the
 Cairo library.
 
+@item @option{-O foreground-color=@var{color}}
+@itemx @option{-O background-color=@var{color}}
+Sets @var{color} as the color to be used for the background or foreground to 
+be used for charts.
+Color should be given in the format @code{#@var{RRRR}@var{GGGG}@var{BBBB}},
+where @var{RRRR}, @var{GGGG} and @var{BBBB} are 4 character hexadecimal
+representations of the red, green and blue components respectively.
+If charts are disabled, this option has no effect.
+
+
 @item @option{-O paginate=@var{boolean}}
 If set, @pspp{} writes an ASCII formfeed the end of every page.  Default:
 @code{off}.
@@ -333,10 +343,13 @@ Length of the bottom margin, in lines.  @pspp{} subtracts this value from
 the page length.  Default: @code{0}.
 
 @item @option{-O box=@{ascii|unicode@}}
-Sets the characters used for lines in tables.  The default,
-@code{ascii}, uses @samp{-}, @samp{|}, and @samp{+} for single-width
-lines and @samp{=} and @samp{#} for double-width lines.  Specify
-@code{unicode} to use Unicode box drawing characters.
+Sets the characters used for lines in tables.  
+If set to 
+@code{ascii} the characters @samp{-}, @samp{|}, and @samp{+} for single-width
+lines and @samp{=} and @samp{#} for double-width lines are used.
+If set to @code{unicode} then  Unicode box drawing characters will be used.
+The default is @code{unicode} if the locale's character encoding is "UTF-8"
+or @code{ascii} otherwise.
 
 @item @option{-O emphasis=@{none|bold|underline@}}
 How to emphasize text.  Bold and underline emphasis are achieved with
@@ -408,8 +421,13 @@ character itself.  If @var{qualifier} is longer than one character,
 only the first character is used; if @var{qualifier} is the empty
 string, then fields are never quoted.
 
+@item @option{-O titles=@var{boolean}}
+Whether table titles (brief descriptions) should be printed.  Default:
+@code{on}.
+
 @item @option{-O captions=@var{boolean}}
-Whether table captions should be printed.  Default: @code{on}.
+Whether table captions (more extensive descriptions) should be
+printed.  Default: on.
 @end table
 
 The CSV format used is an extension to that specified in RFC 4180:
@@ -419,9 +437,24 @@ The CSV format used is an extension to that specified in RFC 4180:
 Each table row is output on a separate line, and each column is output
 as a field.  The contents of a cell that spans multiple rows or
 columns is output only for the top-left row and column; the rest are
-output as empty fields.  When a table has a caption and captions are
-enabled, the caption is output just above the table as a single field
-prefixed by @samp{Table:}.
+output as empty fields.
+
+@item Titles
+When a table has a title and titles are enabled, the title is output
+just above the table as a single field prefixed by @samp{Table:}.
+
+@item Captions
+When a table has a caption and captions are enabled, the caption is
+output just below the table as a single field prefixed by
+@samp{Caption:}.
+
+@item Footnotes
+Within a table, footnote markers are output as bracketed letters
+following the cell's contents, e.g.@tie{}@samp{[a]}, @samp{[b]},
+@enddots{}  The footnotes themselves are output following the body of
+the table, as a separate two-column table introduced with a line that
+says @samp{Footnotes:}.  Each row in the table represent one footnote:
+the first column is the marker, the second column is the text.
 
 @item Text
 Text in output is printed as a field on a line by itself.  The TITLE

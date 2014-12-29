@@ -1,5 +1,5 @@
 /* PSPPIRE - a graphical user interface for PSPP.
-   Copyright (C) 2004, 2005, 2006, 2010, 2011, 2012  Free Software Foundation
+   Copyright (C) 2004, 2005, 2006, 2010, 2011, 2012, 2013, 2014  Free Software Foundation
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -92,7 +92,7 @@ usage (void)
   gtk_help = gtk_help != NULL ? gtk_help + 2 : gtk_help_base;
 
   printf (_("\
-PSPPIRE, a GUI for PSPP, a program for statistical analysis of sample data.\n\
+PSPPIRE, a GUI for PSPP, a program for statistical analysis of sampled data.\n\
 Usage: %s [OPTION]... FILE\n\
 \n\
 Arguments to long options also apply to equivalent short options.\n\
@@ -117,8 +117,8 @@ Informative output:\n\
   -h, --help                display this help and exit\n\
   -V, --version             output version information and exit\n\
 \n\
-A non-option argument is interpreted as a .sav file, a .por file or a syntax\n\
-file to load.\n"),
+A non-option argument is interpreted as a data file in .sav or .zsav or .por\n\
+format or a syntax file to load.\n"),
           program_name, gtk_help, inc_path);
 
   free (inc_path);
@@ -257,25 +257,32 @@ static GMemVTable vtable =
   };
 
 #ifdef __APPLE__
+static const bool apple = true;
+#else
+static const bool apple = false;
+#endif
+
 /* Searches ARGV for the -psn_xxxx option that the desktop application
    launcher passes in, and removes it if it finds it.  Returns the new value
    of ARGC. */
-static int
+static inline int
 remove_psn (int argc, char **argv)
 {
-  int i;
-
-  for (i = 0; i < argc; i++)
+  if (apple)
     {
-      if (!strncmp(argv[i], "-psn", 4))
-        {
-          remove_element (argv, argc + 1, sizeof *argv, i);
-          return argc - 1;
-        }
+      int i;
+
+      for (i = 0; i < argc; i++)
+	{
+	  if (!strncmp (argv[i], "-psn", 4))
+	    {
+	      remove_element (argv, argc + 1, sizeof *argv, i);
+	      return argc - 1;
+	    }
+	}
     }
   return argc;
 }
-#endif  /* __APPLE__ */
 
 int
 main (int argc, char *argv[])
@@ -288,7 +295,12 @@ main (int argc, char *argv[])
   set_program_name (argv[0]);
 
   g_mem_set_vtable (&vtable);
+
+#if !GLIB_CHECK_VERSION(2,32,0)
+  /* g_thread_init() was required before glib 2.32, but it is deprecated since
+     then and calling it yields a compile-time warning. */
   g_thread_init (NULL);
+#endif
 
   gtk_disable_setlocale ();
 
@@ -308,9 +320,7 @@ main (int argc, char *argv[])
       g_warning ("%s", vers);
     }
 
-#ifdef __APPLE__
   argc = remove_psn (argc, argv);
-#endif
 
   /* Parse our own options. 
      This must come BEFORE gdk_init otherwise options such as 

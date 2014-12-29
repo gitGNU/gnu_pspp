@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 2009, 2011 Free Software Foundation, Inc.
+   Copyright (C) 2009, 2011, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@
 
 #include "libpspp/cast.h"
 #include "libpspp/compiler.h"
+#include "output/table-item.h"
 
 #include "gl/xalloc.h"
 
@@ -47,7 +48,7 @@ table_unref (struct table *table)
     {
       assert (table->ref_cnt > 0);
       if (--table->ref_cnt == 0)
-        table->class->destroy (table);
+        table->klass->destroy (table);
     }
 }
 
@@ -104,7 +105,7 @@ table_set_hb (struct table *table, int hb)
 void
 table_init (struct table *table, const struct table_class *class)
 {
-  table->class = class;
+  table->klass = class;
   table->n[TABLE_HORZ] = table->n[TABLE_VERT] = 0;
   table->h[TABLE_HORZ][0] = table->h[TABLE_HORZ][1] = 0;
   table->h[TABLE_VERT][0] = table->h[TABLE_VERT][1] = 0;
@@ -138,7 +139,7 @@ table_get_cell (const struct table *table, int x, int y,
 {
   assert (x >= 0 && x < table->n[TABLE_HORZ]);
   assert (y >= 0 && y < table->n[TABLE_VERT]);
-  table->class->get_cell (table, x, y, cell);
+  table->klass->get_cell (table, x, y, cell);
 }
 
 /* Frees CELL, which should have been initialized by calling
@@ -192,7 +193,7 @@ table_get_rule (const struct table *table, enum table_axis axis, int x, int y)
 {
   assert (x >= 0 && x < table->n[TABLE_HORZ] + (axis == TABLE_HORZ));
   assert (y >= 0 && y < table->n[TABLE_VERT] + (axis == TABLE_VERT));
-  return table->class->get_rule (table, axis, x, y);
+  return table->klass->get_rule (table, axis, x, y);
 }
 
 struct table_unshared
@@ -233,7 +234,7 @@ table_unshare (struct table *table)
 static struct table_unshared *
 table_unshared_cast (const struct table *table)
 {
-  assert (table->class == &table_unshared_class);
+  assert (table->klass == &table_unshared_class);
   return UP_CAST (table, struct table_unshared, table);
 }
 
@@ -295,7 +296,7 @@ table_from_string (unsigned int options, const char *s)
 static struct table_string *
 table_string_cast (const struct table *table)
 {
-  assert (table->class == &table_string_class);
+  assert (table->klass == &table_string_class);
   return UP_CAST (table, struct table_string, table);
 }
 
@@ -316,8 +317,12 @@ table_string_get_cell (const struct table *ts_, int x UNUSED, int y UNUSED,
   cell->d[TABLE_HORZ][1] = 1;
   cell->d[TABLE_VERT][0] = 0;
   cell->d[TABLE_VERT][1] = 1;
-  cell->contents = ts->string;
-  cell->options = ts->options;
+  cell->contents = &cell->inline_contents;
+  cell->inline_contents.options = ts->options;
+  cell->inline_contents.text = ts->string;
+  cell->inline_contents.table = NULL;
+  cell->inline_contents.n_footnotes = 0;
+  cell->n_contents = 1;
   cell->destructor = NULL;
 }
 
@@ -337,3 +342,81 @@ static const struct table_class table_string_class =
     NULL,                       /* paste */
     NULL,                       /* select */
   };
+
+struct table_nested
+  {
+    struct table table;
+    struct table_item *inner;
+  };
+
+static const struct table_class table_nested_class;
+
+/* Creates and returns a table with a single cell that contains INNER.
+   Takes ownership of INNER. */
+struct table *
+table_create_nested (struct table *inner)
+{
+  return table_create_nested_item (table_item_create (inner, NULL, NULL));
+}
+
+/* Creates and returns a table with a single cell that contains INNER.
+   Takes ownership of INNER. */
+struct table *
+table_create_nested_item (struct table_item *inner)
+{
+  struct table_nested *tn = xmalloc (sizeof *tn);
+  table_init (&tn->table, &table_nested_class);
+  tn->table.n[TABLE_HORZ] = tn->table.n[TABLE_VERT] = 1;
+  tn->inner = table_item_ref (inner);
+  return &tn->table;
+}
+
+static struct table_nested *
+table_nested_cast (const struct table *table)
+{
+  assert (table->klass == &table_nested_class);
+  return UP_CAST (table, struct table_nested, table);
+}
+
+static void
+table_nested_destroy (struct table *tn_)
+{
+  struct table_nested *tn = table_nested_cast (tn_);
+  table_item_unref (tn->inner);
+  free (tn);
+}
+
+static void
+table_nested_get_cell (const struct table *tn_, int x UNUSED, int y UNUSED,
+                       struct table_cell *cell)
+{
+  struct table_nested *tn = table_nested_cast (tn_);
+  cell->d[TABLE_HORZ][0] = 0;
+  cell->d[TABLE_HORZ][1] = 1;
+  cell->d[TABLE_VERT][0] = 0;
+  cell->d[TABLE_VERT][1] = 1;
+  cell->contents = &cell->inline_contents;
+  cell->inline_contents.options = TAB_LEFT;
+  cell->inline_contents.text = NULL;
+  cell->inline_contents.table = tn->inner;
+  cell->inline_contents.n_footnotes = 0;
+  cell->n_contents = 1;
+  cell->destructor = NULL;
+}
+
+static int
+table_nested_get_rule (const struct table *tn UNUSED,
+                       enum table_axis axis UNUSED, int x UNUSED, int y UNUSED)
+{
+  return TAL_0;
+}
+
+static const struct table_class table_nested_class =
+  {
+    table_nested_destroy,
+    table_nested_get_cell,
+    table_nested_get_rule,
+    NULL,                       /* paste */
+    NULL,                       /* select */
+  };
+

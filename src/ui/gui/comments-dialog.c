@@ -1,5 +1,5 @@
 /* PSPPIRE - a graphical user interface for PSPP.
-   Copyright (C) 2007, 2010, 2011, 2012  Free Software Foundation
+   Copyright (C) 2007, 2010, 2011, 2012, 2013  Free Software Foundation
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -22,7 +22,6 @@
 #include "psppire-data-editor.h"
 #include "executor.h"
 #include "helper.h"
-#include "psppire-var-store.h"
 #include <ui/syntax-gen.h>
 
 #include "comments-dialog.h"
@@ -75,16 +74,10 @@ wrap_line (GtkTextBuffer *buffer,
   if ( chars > DOC_LINE_LENGTH )
     {
       GtkTextIter line_fold = *iter;
-      GtkTextIter cursor;
 
       gtk_text_iter_set_line_offset (&line_fold, DOC_LINE_LENGTH);
 
       gtk_text_buffer_insert (buffer, &line_fold, "\r\n", 2);
-
-      cursor = line_fold;
-      gtk_text_iter_forward_to_line_end (&cursor);
-
-      gtk_text_buffer_place_cursor (buffer, &cursor);
     }
 
 }
@@ -104,9 +97,6 @@ comments_dialog (PsppireDataWindow *de)
   GtkWidget *label = get_widget_assert (xml, "column-number-label");
   GtkTextBuffer *buffer = gtk_text_view_get_buffer (GTK_TEXT_VIEW (textview));
 
-  PsppireVarStore *vs = NULL;
-
-  g_object_get (de->data_editor, "var-store", &vs, NULL);
 
   gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (de));
 
@@ -144,7 +134,7 @@ comments_dialog (PsppireDataWindow *de)
   }
 
   cd.xml = xml;
-  g_object_get (vs, "dictionary", &cd.dict, NULL);
+  g_object_get (de->data_editor, "dictionary", &cd.dict, NULL);
 
   g_signal_connect (buffer, "mark-set",
 		    G_CALLBACK (set_column_number), label);

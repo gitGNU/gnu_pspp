@@ -1,5 +1,5 @@
 /* PSPPIRE - a graphical user interface for PSPP.
-   Copyright (C) 2011 Free Software Foundation, Inc.
+   Copyright (C) 2011, 2012 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -110,6 +110,7 @@ struct _PsppSheetViewColumn
   guint GSEAL (selected)            : 1;
   guint GSEAL (selectable)          : 1;
   guint GSEAL (row_head)            : 1;
+  guint GSEAL (tabbable)            : 1;
   guint GSEAL (need_button)         : 1;
 };
 
@@ -140,9 +141,9 @@ void                    pspp_sheet_view_column_pack_end            (PsppSheetVie
 								  GtkCellRenderer         *cell,
 								  gboolean                 expand);
 void                    pspp_sheet_view_column_clear               (PsppSheetViewColumn       *tree_column);
-#ifndef GTK_DISABLE_DEPRECATED
+
 GList                  *pspp_sheet_view_column_get_cell_renderers  (PsppSheetViewColumn       *tree_column);
-#endif
+
 void                    pspp_sheet_view_column_add_attribute       (PsppSheetViewColumn       *tree_column,
 								  GtkCellRenderer         *cell_renderer,
 								  const gchar             *attribute,
@@ -184,7 +185,7 @@ void                    pspp_sheet_view_column_clicked             (PsppSheetVie
  */
 void                    pspp_sheet_view_column_set_title           (PsppSheetViewColumn       *tree_column,
 								  const gchar             *title);
-G_CONST_RETURN gchar   *pspp_sheet_view_column_get_title           (PsppSheetViewColumn       *tree_column);
+const gchar   *         pspp_sheet_view_column_get_title           (PsppSheetViewColumn       *tree_column);
 void                    pspp_sheet_view_column_set_expand          (PsppSheetViewColumn       *tree_column,
 								  gboolean                 expand);
 gboolean                pspp_sheet_view_column_get_expand          (PsppSheetViewColumn       *tree_column);
@@ -214,6 +215,9 @@ gboolean                pspp_sheet_view_column_get_selectable     (PsppSheetView
 void                    pspp_sheet_view_column_set_row_head     (PsppSheetViewColumn       *tree_column,
 								  gboolean                 row_head);
 gboolean                pspp_sheet_view_column_get_row_head     (PsppSheetViewColumn       *tree_column);
+void                    pspp_sheet_view_column_set_tabbable     (PsppSheetViewColumn       *tree_column,
+                                                                 gboolean                 tabbable);
+gboolean                pspp_sheet_view_column_get_tabbable     (PsppSheetViewColumn       *tree_column);
 
 
 

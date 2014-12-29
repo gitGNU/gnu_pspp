@@ -267,7 +267,7 @@ cmd_glm (struct lexer *lexer, struct dataset *ds)
 	    }
 
 	  glm.ss_type = lex_integer (lexer);
-	  if (1 > glm.ss_type  && 3 < glm.ss_type )
+	  if (1 > glm.ss_type  ||  3 < glm.ss_type )
 	    {
 	      msg (ME, _("Only types 1, 2 & 3 sums of squares are currently implemented"));
 	      goto error;
@@ -324,6 +324,9 @@ cmd_glm (struct lexer *lexer, struct dataset *ds)
 
   const_var_set_destroy (factors);
   free (glm.factor_vars);
+  for (i = 0 ; i < glm.n_interactions; ++i)
+    interaction_destroy (glm.interactions[i]);
+
   free (glm.interactions);
   free (glm.dep_vars);
 
@@ -384,7 +387,7 @@ fill_submatrix (const gsl_matrix * cov, gsl_matrix * submatrix, bool *dropped_f)
 static void
 ssq_type1 (struct covariance *cov, gsl_vector *ssq, const struct glm_spec *cmd)
 {
-  gsl_matrix *cm = covariance_calculate_unnormalized (cov);
+  const gsl_matrix *cm = covariance_calculate_unnormalized (cov);
   size_t i;
   size_t k;
   bool *model_dropped = xcalloc (covariance_dim (cov), sizeof (*model_dropped));
@@ -444,7 +447,6 @@ ssq_type1 (struct covariance *cov, gsl_vector *ssq, const struct glm_spec *cmd)
 
   free (model_dropped);
   free (submodel_dropped);
-  gsl_matrix_free (cm);
 }
 
 /* 
@@ -454,7 +456,7 @@ ssq_type1 (struct covariance *cov, gsl_vector *ssq, const struct glm_spec *cmd)
 static void
 ssq_type2 (struct covariance *cov, gsl_vector *ssq, const struct glm_spec *cmd)
 {
-  gsl_matrix *cm = covariance_calculate_unnormalized (cov);
+  const gsl_matrix *cm = covariance_calculate_unnormalized (cov);
   size_t i;
   size_t k;
   bool *model_dropped = xcalloc (covariance_dim (cov), sizeof (*model_dropped));
@@ -508,7 +510,6 @@ ssq_type2 (struct covariance *cov, gsl_vector *ssq, const struct glm_spec *cmd)
 
   free (model_dropped);
   free (submodel_dropped);
-  gsl_matrix_free (cm);
 }
 
 /* 
@@ -518,7 +519,7 @@ ssq_type2 (struct covariance *cov, gsl_vector *ssq, const struct glm_spec *cmd)
 static void
 ssq_type3 (struct covariance *cov, gsl_vector *ssq, const struct glm_spec *cmd)
 {
-  gsl_matrix *cm = covariance_calculate_unnormalized (cov);
+  const gsl_matrix *cm = covariance_calculate_unnormalized (cov);
   size_t i;
   size_t k;
   bool *model_dropped = xcalloc (covariance_dim (cov), sizeof (*model_dropped));
@@ -565,8 +566,6 @@ ssq_type3 (struct covariance *cov, gsl_vector *ssq, const struct glm_spec *cmd)
       gsl_matrix_free (model_cov);
     }
   free (model_dropped);
-
-  gsl_matrix_free (cm);
 }
 
 
@@ -654,7 +653,9 @@ run_glm (struct glm_spec *cmd, struct casereader *input,
     }
 
   {
-    gsl_matrix *cm = covariance_calculate_unnormalized (cov);
+    const gsl_matrix *ucm = covariance_calculate_unnormalized (cov);
+    gsl_matrix *cm = gsl_matrix_alloc (ucm->size1, ucm->size2);
+    gsl_matrix_memcpy (cm, ucm);
 
     //    dump_matrix (cm);
 
@@ -683,7 +684,6 @@ run_glm (struct glm_spec *cmd, struct casereader *input,
 	break;
       }
     //    dump_matrix (cm);
-
     gsl_matrix_free (cm);
   }
 
@@ -732,6 +732,7 @@ output_glm (const struct glm_spec *cmd, const struct glm_workspace *ws)
 
   msg (MW, "GLM is experimental.  Do not rely on these results.");
   t = tab_create (nc, nr);
+  tab_set_format (t, RC_WEIGHT, wfmt);
   tab_title (t, _("Tests of Between-Subjects Effects"));
 
   tab_headers (t, heading_columns, 0, heading_rows, 0);
@@ -774,12 +775,12 @@ output_glm (const struct glm_spec *cmd, const struct glm_workspace *ws)
       const double df = 1.0;
       const double F = intercept_ssq / df / mse;
       tab_text (t, 0, r, TAB_LEFT | TAT_TITLE, _("Intercept"));
-      tab_double (t, 1, r, 0, intercept_ssq, NULL);
-      tab_double (t, 2, r, 0, 1.00, wfmt);
-      tab_double (t, 3, r, 0, intercept_ssq / df, NULL);
-      tab_double (t, 4, r, 0, F, NULL);
+      tab_double (t, 1, r, 0, intercept_ssq, NULL, RC_OTHER);
+      tab_double (t, 2, r, 0, 1.00, NULL, RC_WEIGHT);
+      tab_double (t, 3, r, 0, intercept_ssq / df, NULL, RC_OTHER);
+      tab_double (t, 4, r, 0, F, NULL, RC_OTHER);
       tab_double (t, 5, r, 0, gsl_cdf_fdist_Q (F, df, n_total - df_corr),
-		  NULL);
+		  NULL, RC_PVALUE);
       r++;
     }
 
@@ -804,13 +805,13 @@ output_glm (const struct glm_spec *cmd, const struct glm_workspace *ws)
       tab_text (t, 0, r, TAB_LEFT | TAT_TITLE, ds_cstr (&str));
       ds_destroy (&str);
 
-      tab_double (t, 1, r, 0, ssq, NULL);
-      tab_double (t, 2, r, 0, df, wfmt);
-      tab_double (t, 3, r, 0, ssq / df, NULL);
-      tab_double (t, 4, r, 0, F, NULL);
+      tab_double (t, 1, r, 0, ssq, NULL, RC_OTHER);
+      tab_double (t, 2, r, 0, df, NULL, RC_WEIGHT);
+      tab_double (t, 3, r, 0, ssq / df, NULL, RC_OTHER);
+      tab_double (t, 4, r, 0, F, NULL, RC_OTHER);
 
       tab_double (t, 5, r, 0, gsl_cdf_fdist_Q (F, df, n_total - df_corr),
-		  NULL);
+		  NULL, RC_PVALUE);
       r++;
     }
 
@@ -826,13 +827,13 @@ output_glm (const struct glm_spec *cmd, const struct glm_workspace *ws)
       ssq += intercept_ssq;
 
     F = ssq / df / mse;
-    tab_double (t, 1, heading_rows, 0, ssq, NULL);
-    tab_double (t, 2, heading_rows, 0, df, wfmt);
-    tab_double (t, 3, heading_rows, 0, ssq / df, NULL);
-    tab_double (t, 4, heading_rows, 0, F, NULL);
+    tab_double (t, 1, heading_rows, 0, ssq, NULL, RC_OTHER);
+    tab_double (t, 2, heading_rows, 0, df, NULL, RC_WEIGHT);
+    tab_double (t, 3, heading_rows, 0, ssq / df, NULL, RC_OTHER);
+    tab_double (t, 4, heading_rows, 0, F, NULL, RC_OTHER);
 
     tab_double (t, 5, heading_rows, 0,
-		gsl_cdf_fdist_Q (F, df, n_total - df_corr), NULL);
+		gsl_cdf_fdist_Q (F, df, n_total - df_corr), NULL, RC_PVALUE);
   }
 
   {
@@ -840,15 +841,15 @@ output_glm (const struct glm_spec *cmd, const struct glm_workspace *ws)
     const double ssq = gsl_vector_get (ws->ssq, 0);
     const double mse = ssq / df;
     tab_text (t, 0, r, TAB_LEFT | TAT_TITLE, _("Error"));
-    tab_double (t, 1, r, 0, ssq, NULL);
-    tab_double (t, 2, r, 0, df, wfmt);
-    tab_double (t, 3, r++, 0, mse, NULL);
+    tab_double (t, 1, r, 0, ssq, NULL, RC_OTHER);
+    tab_double (t, 2, r, 0, df, NULL, RC_WEIGHT);
+    tab_double (t, 3, r++, 0, mse, NULL, RC_OTHER);
   }
 
   {
     tab_text (t, 0, r, TAB_LEFT | TAT_TITLE, _("Total"));
-    tab_double (t, 1, r, 0, ws->total_ssq + intercept_ssq, NULL);
-    tab_double (t, 2, r, 0, n_total, wfmt);
+    tab_double (t, 1, r, 0, ws->total_ssq + intercept_ssq, NULL, RC_OTHER);
+    tab_double (t, 2, r, 0, n_total, NULL, RC_WEIGHT);
     
     r++;
   }
@@ -856,8 +857,8 @@ output_glm (const struct glm_spec *cmd, const struct glm_workspace *ws)
   if (cmd->intercept)
     {
       tab_text (t, 0, r, TAB_LEFT | TAT_TITLE, _("Corrected Total"));
-      tab_double (t, 1, r, 0, ws->total_ssq, NULL);
-      tab_double (t, 2, r, 0, n_total - 1.0, wfmt);
+      tab_double (t, 1, r, 0, ws->total_ssq, NULL, RC_OTHER);
+      tab_double (t, 2, r, 0, n_total - 1.0, NULL, RC_WEIGHT);
     }
 
   tab_submit (t);

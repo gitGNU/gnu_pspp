@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 1997-9, 2000, 2006, 2007, 2009, 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 1997-9, 2000, 2006, 2007, 2009, 2010, 2011, 2012, 2013 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -138,13 +138,12 @@ cmd_data_list (struct lexer *lexer, struct dataset *ds)
 	{
           if (!in_input_program ())
             {
-              msg (SE, _("The END subcommand may only be used within "
-                         "INPUT PROGRAM."));
+              msg (SE, _("The %s subcommand may only be used within %s."), "END", "INPUT PROGRAM");
               goto error;
             }
 	  if (end)
 	    {
-	      msg (SE, _("The END subcommand may only be specified once."));
+	      msg (SE, _("The %s subcommand may only be specified once."), "END");
 	      goto error;
 	    }
 
@@ -252,7 +251,7 @@ cmd_data_list (struct lexer *lexer, struct dataset *ds)
 
   if (type != DP_FIXED && end != NULL)
     {
-      msg (SE, _("The END subcommand may be used only with DATA LIST FIXED."));
+      msg (SE, _("The %s subcommand may be used only with %s."), "END", "DATA LIST FIXED");
       goto error;
     }
 
@@ -297,7 +296,7 @@ cmd_data_list (struct lexer *lexer, struct dataset *ds)
   fh_unref (fh);
   free (encoding);
 
-  return CMD_SUCCESS;
+  return CMD_DATA_LIST;
 
  error:
   data_parser_destroy (parser);

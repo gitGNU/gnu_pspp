@@ -2,7 +2,8 @@ Installation Instructions for GNU pspp
 **************************************
 
 These instructions are based on the generic GNU installation
-instructions, but they have been tailored for PSPP.
+instructions, but they have been tailored for PSPP.  These instructions
+apply only to people wishing to build and install PSPP from source. 
 
 Overview
 ========
@@ -17,9 +18,18 @@ the following simple procedure should work, even on non-GNU systems:
  sudo make install
 
 Obviously, you should replace 'pspp-*' in the above, with the name of
-the tarball you are installing.  If any part of this process fails, then 
-it's likely that one or more of the necessary prerequisites is missing
-from your system.   Read on to find out how to correct this.
+the tarball you are installing.  
+
+In 99% of cases, that is all you have to do - FINISHED! 
+
+
+
+
+If any part of the above process fails, then it is
+likely that one or more of the necessary prerequisites is missing
+from your system.  The following paragraphs contain highly detailed
+information which will help you fix this.
+
 
 Before You Install
 ==================
@@ -35,13 +45,13 @@ not present on your system.
 
 The following packages are required to install PSPP:
 
-    * An ANSI C compiler and tool chain.  On Unix-like systems, we
+    * A C compiler and tool chain.  On Unix-like systems, we
       recommend GCC, but any modern compilation environment should
       work.  On Microsoft Windows, Cygwin (http://www.cygwin.com/) and
       MinGW (http://www.mingw.org/) are known to work.
 
     * The GNU Scientific Library (http://www.gnu.org/software/gsl/),
-      version 1.8 or later, including libgslcblas included with GSL.
+      version 1.13 or later, including libgslcblas included with GSL.
 
     * Perl (http://www.perl.org/), version 5.005_03 or later.  Perl is
       required during build but not after installation.
@@ -50,13 +60,16 @@ The following packages are required to install PSPP:
       If you don't have a version already, you can install GNU
       libiconv (http://www.gnu.org/software/libiconv/).
 
-    * libintl, from GNU gettext (http://ww.gnu.org/software/gettext).
+    * libintl, from GNU gettext (http://www.gnu.org/software/gettext).
       GNU libc includes an integrated libintl, so there is no need to
       separately install libintl on a GNU/Linux system.
 
+    * zlib (http://www.zlib.net/).
+
 The following packages are required to enable PSPP's graphing
 features.  If you cannot arrange to install them, you must run
-`configure' with --without-cairo.
+`configure' with --without-cairo (in which case you will get no graphing
+capability).
 
     * Cairo (http://cairographics.org/), version 1.5 or later.
 
@@ -70,25 +83,24 @@ use the GUI, you must run `configure' with --without-gui.
       0.18 and 0.19 have a bug that will prevent library detection,
       but other versions should be fine.
 
-    * GTK+ (http://www.gtk.org/), version 2.12.0 or later.
+    * GTK+ (http://www.gtk.org/), version 2.24.0  -  The Gtk+-3.x series will NOT work!
 
     * GtkSourceView (http://projects.gnome.org/gtksourceview/) 
       version 2.2 or later.
 
+The following packages are optional:
 
-Installing the following packages will allow your PSPP binary to read
+Installing the following packages will allow your PSPP program to read
 Gnumeric files.
-
-    * zlib (http://www.zlib.net/).
 
     * libxml2 (http://xmlsoft.org/).  
 
-Installing the following packages will allow your PSPP binary to write
+Installing the following packages will allow your PSPP program to write
 OpenDocument text (ODT) files:
 
     * libxml2 (http://xmlsoft.org/).  
 
-The following packages are optional.
+Other optional packages:
 
     * libncurses (http://www.gnu.org/software/ncurses/).  Without it,
       PSPP will assume it is running in an 80x25 terminal.
@@ -202,7 +214,7 @@ details on some of the pertinent environment variables.
 by setting variables in the command line or in the environment.  Here
 is an example:
 
-     ./configure CC=c89 CFLAGS=-O2 LIBS=-lposix
+     ./configure CC=c89 CFLAGS=-O0 LIBS=-lposix
 
 To cross-compile PSPP, you will likely need to set the
 PKG_CONFIG_LIBDIR environment variable to point to an
@@ -272,18 +284,11 @@ Optional Features
    Disable building the Perl module, in case it does not build properly
    or you do not need it.
 
-`--enable-anachronistic-dependencies'
-   If you use this option, some of the checks for dependent libraries
-   will be relaxed, permitting configure to succeed when older versions
-   of libraries are detected.   Use of this option is not recommended.
-   If you use it, some features may be missing and the build may fail
-   with obscure error messages.
-
 `--enable-relocatable'
    This option is useful for building a package which can be installed
    into an arbitrary directory and freely copied to any other directory.
    If you use this option, you will probably want to install the pspp
-   with a command similar to "make install DESTDIR=<distination>".
+   with a command similar to "make install DESTDIR=<destination>".
 
 Defining Variables
 ==================
@@ -342,7 +347,7 @@ Generic `configure' Options
 `configure --help' for more details.
 
 ----------------------------------------------------------------------
-Copyright (C) 1994, 1995, 1996, 1999, 2000, 2001, 2002, 2004, 2005, 2007 Free
+Copyright (C) 1994, 1995, 1996, 1999, 2000, 2001, 2002, 2004, 2005, 2007, 2013 Free
 Software Foundation, Inc.
 
 This file is free documentation; the Free Software Foundation gives

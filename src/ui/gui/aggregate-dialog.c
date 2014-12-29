@@ -1,5 +1,5 @@
 /* PSPPIRE - a graphical user interface for PSPP.
-   Copyright (C) 2010, 2011, 2012  Free Software Foundation
+   Copyright (C) 2010, 2011, 2012, 2013, 2014  Free Software Foundation
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 
 #include "dialog-common.h"
 
+#include <float.h>
 #include <gl/c-xvasprintf.h>
 #include <language/stats/aggregate.h>
 
@@ -165,6 +166,11 @@ choose_filename (struct aggregate *fd)
   filter = gtk_file_filter_new ();
   gtk_file_filter_set_name (filter, _("System Files (*.sav)"));
   gtk_file_filter_add_mime_type (filter, "application/x-spss-sav");
+  gtk_file_chooser_add_filter (GTK_FILE_CHOOSER (dialog), filter);
+
+  filter = gtk_file_filter_new ();
+  gtk_file_filter_set_name (filter, _("Compressed System Files (*.zsav)"));
+  gtk_file_filter_add_pattern (filter, "*.zsav");
   gtk_file_chooser_add_filter (GTK_FILE_CHOOSER (dialog), filter);
 
   filter = gtk_file_filter_new ();
@@ -427,11 +433,11 @@ on_acr_change (const struct aggregate *agg, GtkTreeView *tv)
   gtk_entry_set_text (GTK_ENTRY (agg->summary_var_label_entry), label);
   gtk_entry_set_text (GTK_ENTRY (agg->summary_sv_entry), srcvar);
   
-  text = c_xasprintf ("%g", arg1);
+  text = c_xasprintf ("%.*g", DBL_DIG + 1, arg1);
   gtk_entry_set_text (GTK_ENTRY (agg->summary_arg1_entry), text);
   g_free (text);
 
-  text = c_xasprintf ("%g", arg2);
+  text = c_xasprintf ("%.*g", DBL_DIG + 1, arg2);
   gtk_entry_set_text (GTK_ENTRY (agg->summary_arg2_entry), text);
   g_free (text);
 
@@ -459,8 +465,6 @@ aggregate_dialog (PsppireDataWindow *dw)
 {
   struct aggregate fd;
   gint response;
-
-  PsppireVarStore *vs;
 
   GtkWidget *dialog ;
   GtkWidget *source ;
@@ -557,11 +561,9 @@ aggregate_dialog (PsppireDataWindow *dw)
 
   g_signal_connect_swapped (dialog, "refresh", G_CALLBACK (refresh),  &fd);
 
-  g_object_get (fd.de->data_editor, "var-store", &vs, NULL);
-
   gtk_window_set_transient_for (GTK_WINDOW (dialog), GTK_WINDOW (fd.de));
 
-  g_object_get (vs, "dictionary", &fd.dict, NULL);
+  g_object_get (fd.de->data_editor, "dictionary", &fd.dict, NULL);
   g_object_set (source, "model", fd.dict, NULL);
 
 
@@ -680,10 +682,10 @@ append_summary_spec (const struct aggregate *agg, GtkTreeIter *iter, GString *st
       ds_put_cstr (&dss, srcvar);
 
       if ( arity > 0)
-	ds_put_c_format (&dss, ", %g", arg1);
+	ds_put_c_format (&dss, ", %.*g", DBL_DIG + 1, arg1);
 
       if ( arity > 1)
-	ds_put_c_format (&dss, ", %g", arg2);
+	ds_put_c_format (&dss, ", %.*g", DBL_DIG + 1, arg2);
 
       ds_put_cstr (&dss, ")");
 

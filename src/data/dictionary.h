@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 2004, 2007, 2009, 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 2004, 2007, 2009, 2010, 2011, 2012, 2013 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -63,6 +63,9 @@ struct variable *dict_clone_var_as (struct dictionary *,
 struct variable *dict_clone_var_as_assert (struct dictionary *,
                                            const struct variable *,
                                            const char *);
+
+struct variable *dict_clone_var_in_place_assert (struct dictionary *,
+                                                 const struct variable *);
 
 /* Deleting variables. */
 void dict_delete_var (struct dictionary *, struct variable *);
@@ -178,12 +181,10 @@ struct dict_callbacks
   void (*var_added) (struct dictionary *, int, void *);
   void (*var_deleted) (struct dictionary *, const struct variable *,
                        int dict_index, int case_index, void *);
-  void (*var_changed) (struct dictionary *, int, void *);
-  void (*var_resized) (struct dictionary *, int, int, void *);
+  void (*var_changed) (struct dictionary *, int, unsigned int, const struct variable *, void *);
   void (*weight_changed) (struct dictionary *, int, void *);
   void (*filter_changed) (struct dictionary *, int, void *);
   void (*split_changed) (struct dictionary *, void *);
-  void (*var_display_width_changed) (struct dictionary *, int, void *);
  };
 
 void dict_set_callbacks (struct dictionary *, const struct dict_callbacks *,

@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 2009, 2010, 2011 Free Software Foundation, Inc.
+   Copyright (C) 2009, 2010, 2011, 2013 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -113,15 +113,17 @@ reliability_destroy (struct reliability *rel)
 {
   int j;
   ds_destroy (&rel->scale_name);
-  for (j = 0; j < rel->n_sc ; ++j)
-    {
-      int x;
-      free (rel->sc[j].items);
-      moments1_destroy (rel->sc[j].total);
-      for (x = 0; x < rel->sc[j].n_items; ++x)
-	free (rel->sc[j].m[x]);
-      free (rel->sc[j].m);
-    }
+  if (rel->sc)
+    for (j = 0; j < rel->n_sc ; ++j)
+      {
+	int x;
+	free (rel->sc[j].items);
+        moments1_destroy (rel->sc[j].total);
+        if (rel->sc[j].m)
+          for (x = 0; x < rel->sc[j].n_items; ++x)
+            free (rel->sc[j].m[x]);
+	free (rel->sc[j].m);
+      }
 
   free (rel->sc);
   free (rel->variables);
@@ -136,12 +138,14 @@ cmd_reliability (struct lexer *lexer, struct dataset *ds)
   reliability.n_variables = 0;
   reliability.variables = NULL;
   reliability.model = MODEL_ALPHA;
-    reliability.exclude = MV_ANY;
+  reliability.exclude = MV_ANY;
   reliability.summary = 0;
-
+  reliability.n_sc = 0;
+  reliability.sc = NULL;
   reliability.wv = dict_get_weight (dict);
-
   reliability.total_start = 0;
+  ds_init_empty (&reliability.scale_name);
+
 
   lex_match (lexer, T_SLASH);
 
@@ -168,7 +172,7 @@ cmd_reliability (struct lexer *lexer, struct dataset *ds)
       reliability.n_sc = 1;
       reliability.sc = xzalloc (sizeof (struct cronbach) * reliability.n_sc);
 
-      ds_init_cstr (&reliability.scale_name, "ANY");
+      ds_assign_cstr (&reliability.scale_name, "ANY");
 
       c = &reliability.sc[0];
       c->n_items = reliability.n_variables;
@@ -371,6 +375,20 @@ run_reliability (struct dataset *ds, const struct reliability *reliability)
   struct casereader *group;
 
   struct casegrouper *grouper = casegrouper_create_splits (proc_open (ds), dict);
+  int si;
+
+  for (si = 0 ; si < reliability->n_sc; ++si)
+    {
+      struct cronbach *s = &reliability->sc[si];
+      int i;
+
+      s->m = xzalloc (sizeof *s->m * s->n_items);
+      s->total = moments1_create (MOMENT_VARIANCE);
+
+      for (i = 0 ; i < s->n_items ; ++i )
+	s->m[i] = moments1_create (MOMENT_VARIANCE);
+    }
+
 
   while (casegrouper_get_next_group (grouper, &group))
     {
@@ -434,11 +452,10 @@ do_reliability (struct casereader *input, struct dataset *ds,
     {
       struct cronbach *s = &rel->sc[si];
 
-      s->m = xzalloc (sizeof (s->m) * s->n_items);
-      s->total = moments1_create (MOMENT_VARIANCE);
+      moments1_clear (s->total);
 
       for (i = 0 ; i < s->n_items ; ++i )
-	s->m[i] = moments1_create (MOMENT_VARIANCE);
+        moments1_clear (s->m[i]);
     }
 
   input = casereader_create_filter_missing (input,
@@ -520,6 +537,7 @@ case_processing_summary (casenumber n_valid, casenumber n_missing,
   int heading_rows = 1;
   struct tab_table *tbl;
   tbl = tab_create (n_cols, n_rows);
+  tab_set_format (tbl, RC_WEIGHT, wfmt);
   tab_headers (tbl, heading_columns, 0, heading_rows, 0);
 
   tab_title (tbl, _("Case Processing Summary"));
@@ -564,27 +582,27 @@ case_processing_summary (casenumber n_valid, casenumber n_missing,
   total = n_missing + n_valid;
 
   tab_double (tbl, 2, heading_rows, TAB_RIGHT,
-	     n_valid, wfmt);
+	     n_valid, NULL, RC_WEIGHT);
 
 
   tab_double (tbl, 2, heading_rows + 1, TAB_RIGHT,
-	     n_missing, wfmt);
+	     n_missing, NULL, RC_WEIGHT);
 
 
   tab_double (tbl, 2, heading_rows + 2, TAB_RIGHT,
-	     total, wfmt);
+	     total, NULL, RC_WEIGHT);
 
 
   tab_double (tbl, 3, heading_rows, TAB_RIGHT,
-	     100 * n_valid / (double) total, NULL);
+	      100 * n_valid / (double) total, NULL, RC_OTHER);
 
 
   tab_double (tbl, 3, heading_rows + 1, TAB_RIGHT,
-	     100 * n_missing / (double) total, NULL);
+	      100 * n_missing / (double) total, NULL, RC_OTHER);
 
 
   tab_double (tbl, 3, heading_rows + 2, TAB_RIGHT,
-	     100 * total / (double) total, NULL);
+	      100 * total / (double) total, NULL, RC_OTHER);
 
 
   tab_submit (tbl);
@@ -600,8 +618,10 @@ reliability_summary_total (const struct reliability *rel)
   const int heading_columns = 1;
   const int heading_rows = 1;
   const int n_rows = rel->sc[0].n_items + heading_rows ;
-
+  const struct variable *wv = rel->wv;
+  const struct fmt_spec *wfmt = wv ? var_get_print_format (wv) : & F_8_0;
   struct tab_table *tbl = tab_create (n_cols, n_rows);
+  tab_set_format (tbl, RC_WEIGHT, wfmt);
   tab_headers (tbl, heading_columns, 0, heading_rows, 0);
 
   tab_title (tbl, _("Item-Total Statistics"));
@@ -650,13 +670,13 @@ reliability_summary_total (const struct reliability *rel)
       moments1_calculate (s->total, &weight, &mean, &var, 0, 0);
 
       tab_double (tbl, 1, heading_rows + i, TAB_RIGHT,
-		 mean, NULL);
+		  mean, NULL, RC_OTHER);
 
       tab_double (tbl, 2, heading_rows + i, TAB_RIGHT,
-		 s->variance_of_sums, NULL);
+		  s->variance_of_sums, NULL, RC_OTHER);
 
       tab_double (tbl, 4, heading_rows + i, TAB_RIGHT,
-		 s->alpha, NULL);
+		  s->alpha, NULL, RC_OTHER);
 
 
       moments1_calculate (rel->sc[0].m[i], &weight, &mean, &var, 0,0);
@@ -667,7 +687,7 @@ reliability_summary_total (const struct reliability *rel)
 
 
       tab_double (tbl, 3, heading_rows + i, TAB_RIGHT,
-		 item_to_total_r, NULL);
+		  item_to_total_r, NULL, RC_OTHER);
     }
 
 
@@ -705,8 +725,11 @@ reliability_statistics (const struct reliability *rel)
   int n_rows = rol[rel->model].n_rows;
   int heading_columns = rol[rel->model].heading_cols;
   int heading_rows = rol[rel->model].heading_rows;
-
+  const struct variable *wv = rel->wv;
+  const struct fmt_spec *wfmt = wv ? var_get_print_format (wv) : & F_8_0;
   struct tab_table *tbl = tab_create (n_cols, n_rows);
+  tab_set_format (tbl, RC_WEIGHT, wfmt);
+
   tab_headers (tbl, heading_columns, 0, heading_rows, 0);
 
   tab_title (tbl, _("Reliability Statistics"));
@@ -743,9 +766,6 @@ static void
 reliability_statistics_model_alpha (struct tab_table *tbl,
 				    const struct reliability *rel)
 {
-  const struct variable *wv = rel->wv;
-  const struct fmt_spec *wfmt = wv ? var_get_print_format (wv) : & F_8_0;
-
   const struct cronbach *s = &rel->sc[0];
 
   tab_text (tbl, 0, 0, TAB_CENTER | TAT_TITLE,
@@ -754,9 +774,9 @@ reliability_statistics_model_alpha (struct tab_table *tbl,
   tab_text (tbl, 1, 0, TAB_CENTER | TAT_TITLE,
 		_("N of Items"));
 
-  tab_double (tbl, 0, 1, TAB_RIGHT, s->alpha, NULL);
+  tab_double (tbl, 0, 1, TAB_RIGHT, s->alpha, NULL, RC_OTHER);
 
-  tab_double (tbl, 1, 1, TAB_RIGHT, s->n_items, wfmt);
+  tab_double (tbl, 1, 1, TAB_RIGHT, s->n_items, NULL, RC_WEIGHT);
 }
 
 
@@ -764,9 +784,6 @@ static void
 reliability_statistics_model_split (struct tab_table *tbl,
 				    const struct reliability *rel)
 {
-  const struct variable *wv = rel->wv;
-  const struct fmt_spec *wfmt = wv ? var_get_print_format (wv) : & F_8_0;
-
   tab_text (tbl, 0, 0, TAB_LEFT,
 	    _("Cronbach's Alpha"));
 
@@ -779,8 +796,6 @@ reliability_statistics_model_split (struct tab_table *tbl,
   tab_text (tbl, 2, 1, TAB_LEFT,
 	    _("N of Items"));
 
-
-
   tab_text (tbl, 1, 2, TAB_LEFT,
 	    _("Part 2"));
 
@@ -790,14 +805,11 @@ reliability_statistics_model_split (struct tab_table *tbl,
   tab_text (tbl, 2, 3, TAB_LEFT,
 	    _("N of Items"));
 
-
-
   tab_text (tbl, 1, 4, TAB_LEFT,
 	    _("Total N of Items"));
 
   tab_text (tbl, 0, 5, TAB_LEFT,
 	    _("Correlation Between Forms"));
-
 
   tab_text (tbl, 0, 6, TAB_LEFT,
 	    _("Spearman-Brown Coefficient"));
@@ -814,14 +826,14 @@ reliability_statistics_model_split (struct tab_table *tbl,
 
 
 
-  tab_double (tbl, 3, 0, TAB_RIGHT, rel->sc[1].alpha, NULL);
-  tab_double (tbl, 3, 2, TAB_RIGHT, rel->sc[2].alpha, NULL);
+  tab_double (tbl, 3, 0, TAB_RIGHT, rel->sc[1].alpha, NULL, RC_OTHER);
+  tab_double (tbl, 3, 2, TAB_RIGHT, rel->sc[2].alpha, NULL, RC_OTHER);
 
-  tab_double (tbl, 3, 1, TAB_RIGHT, rel->sc[1].n_items, wfmt);
-  tab_double (tbl, 3, 3, TAB_RIGHT, rel->sc[2].n_items, wfmt);
+  tab_double (tbl, 3, 1, TAB_RIGHT, rel->sc[1].n_items, NULL, RC_WEIGHT);
+  tab_double (tbl, 3, 3, TAB_RIGHT, rel->sc[2].n_items, NULL, RC_WEIGHT);
 
   tab_double (tbl, 3, 4, TAB_RIGHT,
-	     rel->sc[1].n_items + rel->sc[2].n_items, wfmt);
+	     rel->sc[1].n_items + rel->sc[2].n_items, NULL, RC_WEIGHT);
 
   {
     /* R is the correlation between the two parts */
@@ -840,12 +852,12 @@ reliability_statistics_model_split (struct tab_table *tbl,
     r /= sqrt (rel->sc[2].variance_of_sums);
     r /= 2.0;
 
-    tab_double (tbl, 3, 5, TAB_RIGHT, r, NULL);
+    tab_double (tbl, 3, 5, TAB_RIGHT, r, NULL, RC_OTHER);
 
     /* Equal length Spearman-Brown Coefficient */
-    tab_double (tbl, 3, 6, TAB_RIGHT, 2 * r / (1.0 + r), NULL);
+    tab_double (tbl, 3, 6, TAB_RIGHT, 2 * r / (1.0 + r), NULL, RC_OTHER);
 
-    tab_double (tbl, 3, 8, TAB_RIGHT, g, NULL);
+    tab_double (tbl, 3, 8, TAB_RIGHT, g, NULL, RC_OTHER);
 
     tmp = (1.0 - r*r) * rel->sc[1].n_items * rel->sc[2].n_items /
       pow2 (rel->sc[0].n_items);
@@ -854,7 +866,7 @@ reliability_statistics_model_split (struct tab_table *tbl,
     uly -= pow2 (r);
     uly /= 2 * tmp;
 
-    tab_double (tbl, 3, 7, TAB_RIGHT, uly, NULL);
+    tab_double (tbl, 3, 7, TAB_RIGHT, uly, NULL, RC_OTHER);
   }
 }
 

@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 2006, 2009, 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 2006, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -148,53 +148,75 @@ recode_string_len (const char *to, const char *from,
    Returns the output length if successful, -1 if the output buffer is too
    small. */
 static ssize_t
-try_recode (iconv_t conv,
-            const char *ip, size_t inbytes,
-            char *op_, size_t outbytes)
+try_recode (iconv_t conv, char fallbackchar,
+            const char *in, size_t inbytes,
+            char *out_, size_t outbytes)
 {
-  /* FIXME: Need to ensure that this char is valid in the target encoding */
-  const char fallbackchar = '?';
-  char *op = op_;
+  char *out = out_;
+  int i;
 
   /* Put the converter into the initial shift state, in case there was any
      state information left over from its last usage. */
   iconv (conv, NULL, 0, NULL, 0);
 
-  while (iconv (conv, (ICONV_CONST char **) &ip, &inbytes,
-                &op, &outbytes) == -1)
-    switch (errno)
-      {
-      case EINVAL:
-        if (outbytes < 2)
-          return -1;
-        *op++ = fallbackchar;
-        *op = '\0';
-        return op - op_;
+  /* Do two rounds of iconv() calls:
 
-      case EILSEQ:
-        if (outbytes == 0)
-          return -1;
-        *op++ = fallbackchar;
-        outbytes--;
-        ip++;
-        inbytes--;
-        break;
+     - The first round does the bulk of the conversion using the
+       caller-supplied input data..
 
-      case E2BIG:
-        return -1;
+     - The second round flushes any leftover output.  This has a real effect
+       with input encodings that use combining diacritics, e.g. without the
+       second round the last character tends to gets dropped when converting
+       from windows-1258 to other encodings.
+  */
+  for (i = 0; i < 2; i++)
+    {
+      ICONV_CONST char **inp = i ? NULL : (ICONV_CONST char **) &in;
+      size_t *inbytesp = i ? NULL : &inbytes;
 
-      default:
-        /* should never happen */
-        fprintf (stderr, "Character conversion error: %s\n", strerror (errno));
-        NOT_REACHED ();
-        break;
-      }
+      while (iconv (conv, inp, inbytesp, &out, &outbytes) == -1)
+        switch (errno)
+          {
+          case EINVAL:
+            if (outbytes < 2)
+              return -E2BIG;
+            if (!fallbackchar)
+              return -EINVAL;
+            *out++ = fallbackchar;
+            *out = '\0';
+            return out - out_;
+
+          case EILSEQ:
+            if (outbytes == 0)
+              return -E2BIG;
+            if (!fallbackchar)
+              return -EILSEQ;
+            *out++ = fallbackchar;
+            outbytes--;
+            if (inp)
+              {
+                in++;
+                inbytes--;
+              }
+            break;
+
+          case E2BIG:
+            return -E2BIG;
+
+          default:
+            /* should never happen */
+            fprintf (stderr, "Character conversion error: %s\n",
+                     strerror (errno));
+            NOT_REACHED ();
+            break;
+          }
+    }
 
   if (outbytes == 0)
-    return -1;
+    return -E2BIG;
 
-  *op = '\0';
-  return op - op_;
+  *out = '\0';
+  return out - out_;
 }
 
 /* Converts the string TEXT, which should be encoded in FROM-encoding, to a
@@ -498,21 +520,12 @@ filename_to_utf8 (const char *filename)
   return recode_string ("UTF-8", filename_encoding (), filename, -1);
 }
 
-/* Converts the string TEXT, which should be encoded in FROM-encoding, to a
-   dynamically allocated string in TO-encoding.  Any characters which cannot be
-   converted will be represented by '?'.
-
-   The returned string will be null-terminated and allocated on POOL.
-
-   This function's behaviour differs from that of g_convert_with_fallback
-   provided by GLib.  The GLib function will fail (returns NULL) if any part of
-   the input string is not valid in the declared input encoding.  This function
-   however perseveres even in the presence of badly encoded input. */
-struct substring
-recode_substring_pool (const char *to, const char *from,
-                       struct substring text, struct pool *pool)
+static int
+recode_substring_pool__ (const char *to, const char *from,
+                         struct substring text, char fallbackchar,
+                         struct pool *pool, struct substring *out)
 {
-  size_t outbufferlength;
+  size_t bufsize;
   iconv_t conv ;
 
   if (to == NULL)
@@ -525,25 +538,80 @@ recode_substring_pool (const char *to, const char *from,
 
   if ( (iconv_t) -1 == conv )
     {
-      struct substring out;
-      ss_alloc_substring_pool (&out, text, pool);
-      return out;
+      if (fallbackchar)
+        {
+          out->string = pool_malloc (pool, text.length + 1);
+          out->length = text.length;
+          memcpy (out->string, text.string, text.length);
+          out->string[out->length] = '\0';
+          return 0;
+        }
+      else
+        return EPROTO;
     }
 
-  for ( outbufferlength = 1 ; outbufferlength != 0; outbufferlength <<= 1 )
-    if ( outbufferlength > text.length)
-      {
-        char *output = pool_malloc (pool, outbufferlength);
-        ssize_t output_len = try_recode (conv, text.string, text.length,
-                                         output, outbufferlength);
-        if (output_len >= 0)
-          return ss_buffer (output, output_len);
-        pool_free (pool, output);
-      }
+  for (bufsize = text.length + 1; bufsize > text.length; bufsize *= 2)
+    {
+      char *output = pool_malloc (pool, bufsize);
+      ssize_t retval;
+
+      retval = try_recode (conv, fallbackchar, text.string, text.length,
+                           output, bufsize);
+      if (retval >= 0)
+        {
+          *out = ss_buffer (output, retval);
+          return 0;
+        }
+      pool_free (pool, output);
+
+      if (retval != -E2BIG)
+        return -retval;
+    }
 
   NOT_REACHED ();
 }
 
+/* Converts the string TEXT, which should be encoded in FROM-encoding, to a
+   dynamically allocated string in TO-encoding.  Any characters which cannot be
+   converted will be represented by '?'.
+
+   The returned string will be null-terminated and allocated on POOL with
+   pool_malloc().
+
+   This function's behaviour differs from that of g_convert_with_fallback
+   provided by GLib.  The GLib function will fail (returns NULL) if any part of
+   the input string is not valid in the declared input encoding.  This function
+   however perseveres even in the presence of badly encoded input. */
+struct substring
+recode_substring_pool (const char *to, const char *from,
+                       struct substring text, struct pool *pool)
+{
+  struct substring out;
+
+  recode_substring_pool__ (to, from, text, '?', pool, &out);
+  return out;
+}
+
+/* Converts the string TEXT, which should be encoded in FROM-encoding, to a
+   dynamically allocated string in TO-encoding.  On success, returns 0, and the
+   converted null-terminated string, allocated from POOL with pool_malloc(), is
+   stored in *OUT.  On failure, returns a positive errno value.
+
+   The function fails with an error if any part of the input string is not
+   valid in the declared input encoding. */
+int
+recode_pedantically (const char *to, const char *from,
+                     struct substring text, struct pool *pool,
+                     struct substring *out)
+{
+  int error;
+
+  error = recode_substring_pool__ (to, from, text, 0, pool, out);
+  if (error)
+    *out = ss_empty ();
+  return error;
+}
+
 void
 i18n_init (void)
 {

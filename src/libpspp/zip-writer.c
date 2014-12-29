@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 2010, 2012 Free Software Foundation, Inc.
+   Copyright (C) 2010, 2012, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -25,9 +25,10 @@
 #include <time.h>
 
 #include "gl/crc.h"
-#include "gl/error.h"
 #include "gl/fwriteerror.h"
 #include "gl/xalloc.h"
+
+#include "libpspp/message.h"
 
 #include "gettext.h"
 #define _(msgid) gettext (msgid)
@@ -38,6 +39,8 @@ struct zip_writer
     FILE *file;                 /* Output stream. */
 
     uint16_t date, time;        /* Date and time in MS-DOS format. */
+
+    bool ok;
 
     /* Members already added to the file, so that we can summarize them to the
        central directory at the end of the ZIP file. */
@@ -90,13 +93,15 @@ zip_writer_create (const char *file_name)
   file = fopen (file_name, "wb");
   if (file == NULL)
     {
-      error (0, errno, _("%s: error opening output file"), file_name);
+      msg_error (errno, _("%s: error opening output file"), file_name);
       return NULL;
     }
 
   zw = xmalloc (sizeof *zw);
   zw->file_name = xstrdup (file_name);
   zw->file = file;
+
+  zw->ok = true;
 
   now = time (NULL);
   tm = localtime (&now);
@@ -108,6 +113,24 @@ zip_writer_create (const char *file_name)
   zw->allocated_members = 0;
 
   return zw;
+}
+
+static void
+put_local_header (struct zip_writer *zw, const char *member_name, uint32_t crc,
+                  uint32_t size, int flag)
+{
+  put_u32 (zw, MAGIC_LHDR);     /* local file header signature */
+  put_u16 (zw, 10);             /* version needed to extract */
+  put_u16 (zw, flag);           /* general purpose bit flag */
+  put_u16 (zw, 0);              /* compression method */
+  put_u16 (zw, zw->time);       /* last mod file time */
+  put_u16 (zw, zw->date);       /* last mod file date */
+  put_u32 (zw, crc);            /* crc-32 */
+  put_u32 (zw, size);           /* compressed size */
+  put_u32 (zw, size);           /* uncompressed size */
+  put_u16 (zw, strlen (member_name)); /* file name length */
+  put_u16 (zw, 0);                    /* extra field length */
+  put_bytes (zw, member_name, strlen (member_name));
 }
 
 /* Adds the contents of FILE, with name MEMBER_NAME, to ZW. */
@@ -122,18 +145,7 @@ zip_writer_add (struct zip_writer *zw, FILE *file, const char *member_name)
 
   /* Local file header. */
   offset = ftello (zw->file);
-  put_u32 (zw, MAGIC_LHDR);     /* local file header signature */
-  put_u16 (zw, 10);             /* version needed to extract */
-  put_u16 (zw, 1 << 3);         /* general purpose bit flag */
-  put_u16 (zw, 0);              /* compression method */
-  put_u16 (zw, zw->time);       /* last mod file time */
-  put_u16 (zw, zw->date);       /* last mod file date */
-  put_u32 (zw, 0);              /* crc-32 */
-  put_u32 (zw, 0);              /* compressed size */
-  put_u32 (zw, 0);              /* uncompressed size */
-  put_u16 (zw, strlen (member_name)); /* file name length */
-  put_u16 (zw, 0);                    /* extra field length */
-  put_bytes (zw, member_name, strlen (member_name));
+  put_local_header (zw, member_name, 0, 0, 1 << 3);
 
   /* File data. */
   size = crc = 0;
@@ -145,11 +157,25 @@ zip_writer_add (struct zip_writer *zw, FILE *file, const char *member_name)
       crc = crc32_update (crc, buf, bytes_read);
     }
 
-  /* Data descriptor. */
-  put_u32 (zw, MAGIC_DDHD);
-  put_u32 (zw, crc);
-  put_u32 (zw, size);
-  put_u32 (zw, size);
+  /* Try to seek back to the local file header.  If successful, overwrite it
+     with the correct file size and CRC.  Otherwise, write data descriptor. */
+  if (fseeko (zw->file, offset, SEEK_SET) == 0)
+    {
+      put_local_header (zw, member_name, crc, size, 0);
+      if (fseeko (zw->file, size, SEEK_CUR)
+          && zw->ok)
+        {
+          msg_error (errno, _("%s: error seeking in output file"), zw->file_name);
+          zw->ok = false;
+        }
+    }
+  else
+    {
+      put_u32 (zw, MAGIC_DDHD);
+      put_u32 (zw, crc);
+      put_u32 (zw, size);
+      put_u32 (zw, size);
+    }
 
   /* Add to set of members. */
   if (zw->n_members >= zw->allocated_members)
@@ -219,11 +245,10 @@ zip_writer_close (struct zip_writer *zw)
                                    the starting disk number */
   put_u16 (zw, 0);              /* .ZIP file comment length */
 
-  if (!fwriteerror (zw->file))
-    ok = true;
-  else
+  ok = zw->ok;
+  if (ok && fwriteerror (zw->file))
     {
-      error (0, errno, _("%s: write failed"), zw->file_name);
+      msg_error (errno, _("%s: write failed"), zw->file_name);
       ok = false;
     }
 

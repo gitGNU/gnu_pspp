@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 1997-9, 2000, 2006, 2009, 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 1997-9, 2000, 2006, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -58,6 +58,7 @@ struct variable
 
     /* GUI information. */
     enum measure measure;       /* Nominal, ordinal, or continuous. */
+    enum var_role role;         /* Intended use. */
     int display_width;          /* Width of data editor column. */
     enum alignment alignment;   /* Alignment of data in GUI. */
 
@@ -76,6 +77,12 @@ struct variable
     struct attrset attributes;
   };
 
+
+static void var_set_print_format_quiet (struct variable *v, const struct fmt_spec *print);
+static void var_set_write_format_quiet (struct variable *v, const struct fmt_spec *write);
+static void var_set_label_quiet (struct variable *v, const char *label);
+static void var_set_name_quiet (struct variable *v, const char *name);
+
 /* Creates and returns a new variable with the given NAME and
    WIDTH and other fields initialized to default values.  The
    variable is not added to a dictionary; for that, use
@@ -89,49 +96,20 @@ var_create (const char *name, int width)
   assert (width >= 0 && width <= MAX_STRING);
 
   v = xzalloc (sizeof *v);
-  var_set_name (v, name);
+  var_set_name_quiet (v, name);
   v->width = width;
   mv_init (&v->miss, width);
   v->leave = var_must_leave (v);
   type = val_type_from_width (width);
   v->alignment = var_default_alignment (type);
   v->measure = var_default_measure (type);
+  v->role = ROLE_INPUT;
   v->display_width = var_default_display_width (width);
   v->print = v->write = var_default_formats (width);
   attrset_init (&v->attributes);
   ds_init_empty (&v->name_and_label);
 
   return v;
-}
-
-/* Creates and returns a clone of OLD_VAR.  Most properties of
-   the new variable are copied from OLD_VAR, except:
-
-    - The variable's short name is not copied, because there is
-      no reason to give a new variable with potentially a new
-      name the same short name.
-
-    - The new variable is not added to OLD_VAR's dictionary by
-      default.  Use dict_clone_var, instead, to do that.
-*/
-struct variable *
-var_clone (const struct variable *old_var)
-{
-  struct variable *new_var = var_create (var_get_name (old_var),
-                                         var_get_width (old_var));
-
-  var_set_missing_values (new_var, var_get_missing_values (old_var));
-  var_set_print_format (new_var, var_get_print_format (old_var));
-  var_set_write_format (new_var, var_get_write_format (old_var));
-  var_set_value_labels (new_var, var_get_value_labels (old_var));
-  var_set_label (new_var, var_get_label (old_var), false);
-  var_set_measure (new_var, var_get_measure (old_var));
-  var_set_display_width (new_var, var_get_display_width (old_var));
-  var_set_alignment (new_var, var_get_alignment (old_var));
-  var_set_leave (new_var, var_get_leave (old_var));
-  var_set_attributes (new_var, var_get_attributes (old_var));
-
-  return new_var;
 }
 
 /* Destroys variable V.
@@ -146,7 +124,7 @@ var_destroy (struct variable *v)
       mv_destroy (&v->miss);
       var_clear_short_names (v);
       val_labs_destroy (v->val_labs);
-      var_clear_label (v);
+      var_set_label_quiet (v, NULL);
       attrset_destroy (var_get_attributes (v));
       free (v->name);
       ds_destroy (&v->name_and_label);
@@ -168,8 +146,8 @@ var_get_name (const struct variable *v)
 /* Sets V's name to NAME, a UTF-8 encoded string.
    Do not use this function for a variable in a dictionary.  Use
    dict_rename_var instead. */
-void
-var_set_name (struct variable *v, const char *name)
+static void
+var_set_name_quiet (struct variable *v, const char *name)
 {
   assert (!var_has_vardict (v));
   assert (id_is_plausible (name, false));
@@ -178,7 +156,17 @@ var_set_name (struct variable *v, const char *name)
   v->name = xstrdup (name);
   ds_destroy (&v->name_and_label);
   ds_init_empty (&v->name_and_label);
-  dict_var_changed (v);
+}
+
+/* Sets V's name to NAME, a UTF-8 encoded string.
+   Do not use this function for a variable in a dictionary.  Use
+   dict_rename_var instead. */
+void
+var_set_name (struct variable *v, const char *name)
+{
+  struct variable *ov = var_clone (v);
+  var_set_name_quiet (v, name);
+  dict_var_changed (v, VAR_TRAIT_NAME, ov);
 }
 
 /* Returns VAR's dictionary class. */
@@ -258,22 +246,25 @@ var_get_width (const struct variable *v)
   return v->width;
 }
 
-/* Changes the width of V to NEW_WIDTH.
-   This function should be used cautiously. */
 void
-var_set_width (struct variable *v, int new_width)
+var_set_width_and_formats (struct variable *v, int new_width,
+			   const struct fmt_spec *print, const struct fmt_spec *write)
 {
-  const int old_width = v->width;
+  struct variable *ov;
+  unsigned int traits = 0;
 
-  if (old_width == new_width)
-    return;
+  ov = var_clone (v);
 
-  if (mv_is_resizable (&v->miss, new_width))
-    mv_resize (&v->miss, new_width);
-  else
+  if (var_has_missing_values (v))
     {
-      mv_destroy (&v->miss);
-      mv_init (&v->miss, new_width);
+      if (mv_is_resizable (&v->miss, new_width))
+	mv_resize (&v->miss, new_width);
+      else
+	{
+	  mv_destroy (&v->miss);
+	  mv_init (&v->miss, new_width);
+	}
+      traits |= VAR_TRAIT_MISSING_VALUES;
     }
 
   if (v->val_labs != NULL)
@@ -285,15 +276,52 @@ var_set_width (struct variable *v, int new_width)
           val_labs_destroy (v->val_labs);
           v->val_labs = NULL;
         }
+      traits |= VAR_TRAIT_VALUE_LABELS;
     }
 
-  fmt_resize (&v->print, new_width);
-  fmt_resize (&v->write, new_width);
+  if (fmt_resize (&v->print, new_width))
+    traits |= VAR_TRAIT_PRINT_FORMAT;
 
-  v->width = new_width;
-  dict_var_resized (v, old_width);
-  dict_var_changed (v);
+  if (fmt_resize (&v->write, new_width))
+    traits |= VAR_TRAIT_WRITE_FORMAT;
+
+  if (v->width != new_width)
+    {
+      v->width = new_width;
+      traits |= VAR_TRAIT_WIDTH;
+    }
+
+  if (print)
+    {
+      var_set_print_format_quiet (v, print);
+      traits |= VAR_TRAIT_PRINT_FORMAT;
+    }
+
+  if (write)
+    {
+      var_set_write_format_quiet (v, write);
+      traits |= VAR_TRAIT_WRITE_FORMAT;
+    }
+
+  if (traits != 0)
+    dict_var_changed (v, traits, ov);
 }
+
+/* Changes the width of V to NEW_WIDTH.
+   This function should be used cautiously. */
+void
+var_set_width (struct variable *v, int new_width)
+{
+  const int old_width = v->width;
+
+  if (old_width == new_width)
+    return;
+
+  var_set_width_and_formats (v, new_width, NULL, NULL);
+}
+
+
+
 
 /* Returns true if variable V is numeric, false otherwise. */
 bool
@@ -321,8 +349,8 @@ var_get_missing_values (const struct variable *v)
    width or at least resizable to V's width.
    If MISS is null, then V's missing values, if any, are
    cleared. */
-void
-var_set_missing_values (struct variable *v, const struct missing_values *miss)
+static void
+var_set_missing_values_quiet (struct variable *v, const struct missing_values *miss)
 {
   if (miss != NULL)
     {
@@ -333,8 +361,18 @@ var_set_missing_values (struct variable *v, const struct missing_values *miss)
     }
   else
     mv_clear (&v->miss);
+}
 
-  dict_var_changed (v);
+/* Sets variable V's missing values to MISS, which must be of V's
+   width or at least resizable to V's width.
+   If MISS is null, then V's missing values, if any, are
+   cleared. */
+void
+var_set_missing_values (struct variable *v, const struct missing_values *miss)
+{
+  struct variable *ov = var_clone (v);
+  var_set_missing_values_quiet (v, miss);
+  dict_var_changed (v, VAR_TRAIT_MISSING_VALUES, ov);
 }
 
 /* Sets variable V to have no user-missing values. */
@@ -399,8 +437,8 @@ var_has_value_labels (const struct variable *v)
    which must have a width equal to V's width or one that can be
    changed to V's width.
    If VLS is null, then V's value labels, if any, are removed. */
-void
-var_set_value_labels (struct variable *v, const struct val_labs *vls)
+static void
+var_set_value_labels_quiet (struct variable *v, const struct val_labs *vls)
 {
   val_labs_destroy (v->val_labs);
   v->val_labs = NULL;
@@ -410,9 +448,22 @@ var_set_value_labels (struct variable *v, const struct val_labs *vls)
       assert (val_labs_can_set_width (vls, v->width));
       v->val_labs = val_labs_clone (vls);
       val_labs_set_width (v->val_labs, v->width);
-      dict_var_changed (v);
     }
 }
+
+
+/* Sets variable V's value labels to a copy of VLS,
+   which must have a width equal to V's width or one that can be
+   changed to V's width.
+   If VLS is null, then V's value labels, if any, are removed. */
+void
+var_set_value_labels (struct variable *v, const struct val_labs *vls)
+{
+  struct variable *ov = var_clone (v);
+  var_set_value_labels_quiet (v, vls);
+  dict_var_changed (v, VAR_TRAIT_LABEL, ov);  
+}
+
 
 /* Makes sure that V has a set of value labels,
    by assigning one to it if necessary. */
@@ -527,15 +578,26 @@ var_get_print_format (const struct variable *v)
    valid format specification for a variable of V's width
    (ordinarily an output format, but input formats are not
    rejected). */
-void
-var_set_print_format (struct variable *v, const struct fmt_spec *print)
+static void
+var_set_print_format_quiet (struct variable *v, const struct fmt_spec *print)
 {
   if (!fmt_equal (&v->print, print))
     {
       assert (fmt_check_width_compat (print, v->width));
       v->print = *print;
-      dict_var_changed (v);
     }
+}
+
+/* Sets V's print format specification to PRINT, which must be a
+   valid format specification for a variable of V's width
+   (ordinarily an output format, but input formats are not
+   rejected). */
+void
+var_set_print_format (struct variable *v, const struct fmt_spec *print)
+{
+  struct variable *ov = var_clone (v);
+  var_set_print_format_quiet (v, print);
+  dict_var_changed (v, VAR_TRAIT_PRINT_FORMAT, ov);
 }
 
 /* Returns V's write format specification. */
@@ -549,16 +611,28 @@ var_get_write_format (const struct variable *v)
    valid format specification for a variable of V's width
    (ordinarily an output format, but input formats are not
    rejected). */
-void
-var_set_write_format (struct variable *v, const struct fmt_spec *write)
+static void
+var_set_write_format_quiet (struct variable *v, const struct fmt_spec *write)
 {
   if (!fmt_equal (&v->write, write))
     {
       assert (fmt_check_width_compat (write, v->width));
       v->write = *write;
-      dict_var_changed (v);
     }
 }
+
+/* Sets V's write format specification to WRITE, which must be a
+   valid format specification for a variable of V's width
+   (ordinarily an output format, but input formats are not
+   rejected). */
+void
+var_set_write_format (struct variable *v, const struct fmt_spec *write)
+{
+  struct variable *ov = var_clone (v);
+  var_set_write_format_quiet (v, write);
+  dict_var_changed (v, VAR_TRAIT_WRITE_FORMAT, ov);
+}
+
 
 /* Sets V's print and write format specifications to FORMAT,
    which must be a valid format specification for a variable of
@@ -567,8 +641,10 @@ var_set_write_format (struct variable *v, const struct fmt_spec *write)
 void
 var_set_both_formats (struct variable *v, const struct fmt_spec *format)
 {
-  var_set_print_format (v, format);
-  var_set_write_format (v, format);
+  struct variable *ov = var_clone (v);
+  var_set_print_format_quiet (v, format);
+  var_set_write_format_quiet (v, format);
+  dict_var_changed (v, VAR_TRAIT_PRINT_FORMAT | VAR_TRAIT_WRITE_FORMAT, ov);
 }
 
 /* Returns the default print and write format for a variable of
@@ -639,58 +715,40 @@ var_get_label (const struct variable *v)
 /* Sets V's variable label to UTF-8 encoded string LABEL, stripping off leading
    and trailing white space.  If LABEL is a null pointer or if LABEL is an
    empty string (after stripping white space), then V's variable label (if any)
-   is removed.
-
-   Variable labels are limited to 255 bytes in V's encoding (as returned by
-   var_get_encoding()).  If LABEL fits within this limit, this function returns
-   true.  Otherwise, the variable label is set to a truncated value, this
-   function returns false and, if ISSUE_WARNING is true, issues a warning.  */
-bool
-var_set_label (struct variable *v, const char *label, bool issue_warning)
+   is removed. */
+static void
+var_set_label_quiet (struct variable *v, const char *label)
 {
-  bool truncated = false;
-
   free (v->label);
   v->label = NULL;
 
   if (label != NULL && label[strspn (label, CC_SPACES)])
-    {
-      const char *dict_encoding = var_get_encoding (v);
-      struct substring s = ss_cstr (label);
-      size_t trunc_len;
-
-      if (dict_encoding != NULL)
-        {
-          enum { MAX_LABEL_LEN = 255 };
-
-          trunc_len = utf8_encoding_trunc_len (label, dict_encoding,
-                                               MAX_LABEL_LEN);
-          if (ss_length (s) > trunc_len)
-            {
-              if (issue_warning)
-                msg (SW, _("Truncating variable label for variable `%s' to %d "
-                           "bytes."), var_get_name (v), MAX_LABEL_LEN);
-              ss_truncate (&s, trunc_len);
-              truncated = true;
-            }
-        }
-
-        v->label = ss_xstrdup (s);
-    }
+    v->label = xstrdup (label);
 
   ds_destroy (&v->name_and_label);
   ds_init_empty (&v->name_and_label);
-
-  dict_var_changed (v);
-
-  return truncated;
 }
+
+
+
+/* Sets V's variable label to UTF-8 encoded string LABEL, stripping off leading
+   and trailing white space.  If LABEL is a null pointer or if LABEL is an
+   empty string (after stripping white space), then V's variable label (if any)
+   is removed. */
+void
+var_set_label (struct variable *v, const char *label)
+{
+  struct variable *ov = var_clone (v);
+  var_set_label_quiet (v, label);
+  dict_var_changed (v, VAR_TRAIT_LABEL, ov);
+}
+
 
 /* Removes any variable label from V. */
 void
 var_clear_label (struct variable *v)
 {
-  var_set_label (v, NULL, false);
+  var_set_label (v, NULL);
 }
 
 /* Returns true if V has a variable V,
@@ -729,6 +787,27 @@ measure_to_string (enum measure m)
     }
 }
 
+/* Returns a string version of measurement level M, for use in PSPP command
+   syntax. */
+const char *
+measure_to_syntax (enum measure m)
+{
+  switch (m)
+    {
+    case MEASURE_NOMINAL:
+      return "NOMINAL";
+
+    case MEASURE_ORDINAL:
+      return "ORDINAL";
+
+    case MEASURE_SCALE:
+      return "SCALE";
+
+    default:
+      return "Invalid";
+    }
+}
+
 /* Returns V's measurement level. */
 enum measure
 var_get_measure (const struct variable *v)
@@ -737,13 +816,23 @@ var_get_measure (const struct variable *v)
 }
 
 /* Sets V's measurement level to MEASURE. */
-void
-var_set_measure (struct variable *v, enum measure measure)
+static void
+var_set_measure_quiet (struct variable *v, enum measure measure)
 {
   assert (measure_is_valid (measure));
   v->measure = measure;
-  dict_var_changed (v);
 }
+
+
+/* Sets V's measurement level to MEASURE. */
+void
+var_set_measure (struct variable *v, enum measure measure)
+{
+  struct variable *ov = var_clone (v);
+  var_set_measure_quiet (v, measure);
+  dict_var_changed (v, VAR_TRAIT_MEASURE, ov);
+}
+
 
 /* Returns the default measurement level for a variable of the
    given TYPE, as set by var_create.  The return value can be
@@ -755,6 +844,109 @@ var_default_measure (enum val_type type)
   return type == VAL_NUMERIC ? MEASURE_SCALE : MEASURE_NOMINAL;
 }
 
+/* Returns true if M is a valid variable role,
+   false otherwise. */
+bool
+var_role_is_valid (enum var_role role)
+{
+  switch (role)
+    {
+    case ROLE_NONE:
+    case ROLE_INPUT:
+    case ROLE_TARGET:
+    case ROLE_BOTH:
+    case ROLE_PARTITION:
+    case ROLE_SPLIT:
+      return true;
+
+    default:
+      return false;
+    }
+}
+
+/* Returns a string version of ROLE, for display to a user. */
+const char *
+var_role_to_string (enum var_role role)
+{
+  switch (role)
+    {
+    case ROLE_INPUT:
+      return _("Input");
+
+    case ROLE_TARGET:
+      return _("Output");
+
+    case ROLE_BOTH:
+      return _("Both");
+
+    case ROLE_NONE:
+      return _("None");
+
+    case ROLE_PARTITION:
+      return _("Partition");
+
+    case ROLE_SPLIT:
+      return _("Split");
+
+    default:
+      return "Invalid";
+    }
+}
+
+/* Returns a string version of ROLE, for use in PSPP comamnd syntax. */
+const char *
+var_role_to_syntax (enum var_role role)
+{
+  switch (role)
+    {
+    case ROLE_INPUT:
+      return "INPUT";
+
+    case ROLE_TARGET:
+      return "TARGET";
+
+    case ROLE_BOTH:
+      return "BOTH";
+
+    case ROLE_NONE:
+      return "NONE";
+
+    case ROLE_PARTITION:
+      return "PARTITION";
+
+    case ROLE_SPLIT:
+      return "SPLIT";
+
+    default:
+      return "<invalid>";
+    }
+}
+
+/* Returns V's role. */
+enum var_role
+var_get_role (const struct variable *v)
+{
+  return v->role;
+}
+
+/* Sets V's role to ROLE. */
+static void
+var_set_role_quiet (struct variable *v, enum var_role role)
+{
+  assert (var_role_is_valid (role));
+  v->role = role;
+}
+
+
+/* Sets V's role to ROLE. */
+void
+var_set_role (struct variable *v, enum var_role role)
+{
+  struct variable *ov = var_clone (v);
+  var_set_role_quiet (v, role);
+  dict_var_changed (v, VAR_TRAIT_ROLE, ov);
+}
+
 /* Returns V's display width, which applies only to GUIs. */
 int
 var_get_display_width (const struct variable *v)
@@ -763,14 +955,23 @@ var_get_display_width (const struct variable *v)
 }
 
 /* Sets V's display width to DISPLAY_WIDTH. */
+static void
+var_set_display_width_quiet (struct variable *v, int new_width)
+{
+  if (v->display_width != new_width)
+    {
+      v->display_width = new_width;
+    }
+}
+
 void
 var_set_display_width (struct variable *v, int new_width)
 {
   if (v->display_width != new_width)
     {
-      v->display_width = new_width;
-      dict_var_display_width_changed (v);
-      dict_var_changed (v);
+      struct variable *ov = var_clone (v);
+      var_set_display_width_quiet (v, new_width);
+      dict_var_changed (v, VAR_TRAIT_DISPLAY_WIDTH, ov);
     }
 }
 
@@ -811,6 +1012,26 @@ alignment_to_string (enum alignment a)
     }
 }
 
+/* Returns a string version of alignment A, for use in PSPP command syntax. */
+const char *
+alignment_to_syntax (enum alignment a)
+{
+  switch (a)
+    {
+    case ALIGN_LEFT:
+      return "LEFT";
+
+    case ALIGN_RIGHT:
+      return "RIGHT";
+
+    case ALIGN_CENTRE:
+      return "CENTER";
+
+    default:
+      return "Invalid";
+    }
+}
+
 /* Returns V's display alignment, which applies only to GUIs. */
 enum alignment
 var_get_alignment (const struct variable *v)
@@ -819,13 +1040,22 @@ var_get_alignment (const struct variable *v)
 }
 
 /* Sets V's display alignment to ALIGNMENT. */
-void
-var_set_alignment (struct variable *v, enum alignment alignment)
+static void
+var_set_alignment_quiet (struct variable *v, enum alignment alignment)
 {
   assert (alignment_is_valid (alignment));
   v->alignment = alignment;
-  dict_var_changed (v);
 }
+
+/* Sets V's display alignment to ALIGNMENT. */
+void
+var_set_alignment (struct variable *v, enum alignment alignment)
+{
+  struct variable *ov = var_clone (v);
+  var_set_alignment_quiet (v, alignment);
+  dict_var_changed (v, VAR_TRAIT_ALIGNMENT, ov);
+}
+
 
 /* Returns the default display alignment for a variable of the
    given TYPE, as set by var_create.  The return value can be
@@ -848,13 +1078,23 @@ var_get_leave (const struct variable *v)
 }
 
 /* Sets V's leave setting to LEAVE. */
-void
-var_set_leave (struct variable *v, bool leave)
+static void
+var_set_leave_quiet (struct variable *v, bool leave)
 {
   assert (leave || !var_must_leave (v));
   v->leave = leave;
-  dict_var_changed (v);
 }
+
+
+/* Sets V's leave setting to LEAVE. */
+void
+var_set_leave (struct variable *v, bool leave)
+{
+  struct variable *ov = var_clone (v);
+  var_set_leave_quiet (v, leave);
+  dict_var_changed (v, VAR_TRAIT_LEAVE, ov);
+}
+
 
 /* Returns true if V must be left from case to case,
    false if it can be set either way. */
@@ -899,6 +1139,8 @@ var_get_short_name (const struct variable *var, size_t idx)
 void
 var_set_short_name (struct variable *var, size_t idx, const char *short_name)
 {
+  struct variable *ov = var_clone (var);
+
   assert (short_name == NULL || id_is_plausible (short_name, false));
 
   /* Clear old short name numbered IDX, if any. */
@@ -924,7 +1166,7 @@ var_set_short_name (struct variable *var, size_t idx, const char *short_name)
       var->short_names[idx] = utf8_to_upper (short_name);
     }
 
-  dict_var_changed (var);
+  dict_var_changed (var, VAR_TRAIT_NAME, ov);
 }
 
 /* Clears V's short names. */
@@ -974,12 +1216,22 @@ var_get_attributes (const struct variable *v)
 }
 
 /* Replaces variable V's attributes set by a copy of ATTRS. */
-void
-var_set_attributes (struct variable *v, const struct attrset *attrs) 
+static void
+var_set_attributes_quiet (struct variable *v, const struct attrset *attrs) 
 {
   attrset_destroy (&v->attributes);
   attrset_clone (&v->attributes, attrs);
 }
+
+/* Replaces variable V's attributes set by a copy of ATTRS. */
+void
+var_set_attributes (struct variable *v, const struct attrset *attrs) 
+{
+  struct variable *ov = var_clone (v);
+  var_set_attributes_quiet (v, attrs);
+  dict_var_changed (v, VAR_TRAIT_ATTRIBUTES, ov);
+}
+
 
 /* Returns true if V has any custom attributes, false if it has none. */
 bool
@@ -988,6 +1240,40 @@ var_has_attributes (const struct variable *v)
   return attrset_count (&v->attributes) > 0;
 }
 
+
+/* Creates and returns a clone of OLD_VAR.  Most properties of
+   the new variable are copied from OLD_VAR, except:
+
+    - The variable's short name is not copied, because there is
+      no reason to give a new variable with potentially a new
+      name the same short name.
+
+    - The new variable is not added to OLD_VAR's dictionary by
+      default.  Use dict_clone_var, instead, to do that.
+*/
+struct variable *
+var_clone (const struct variable *old_var)
+{
+  struct variable *new_var = var_create (var_get_name (old_var),
+                                         var_get_width (old_var));
+
+  var_set_missing_values_quiet (new_var, var_get_missing_values (old_var));
+  var_set_print_format_quiet (new_var, var_get_print_format (old_var));
+  var_set_write_format_quiet (new_var, var_get_write_format (old_var));
+  var_set_value_labels_quiet (new_var, var_get_value_labels (old_var));
+  var_set_label_quiet (new_var, var_get_label (old_var));
+  var_set_measure_quiet (new_var, var_get_measure (old_var));
+  var_set_role_quiet (new_var, var_get_role (old_var));
+  var_set_display_width_quiet (new_var, var_get_display_width (old_var));
+  var_set_alignment_quiet (new_var, var_get_alignment (old_var));
+  var_set_leave_quiet (new_var, var_get_leave (old_var));
+  var_set_attributes_quiet (new_var, var_get_attributes (old_var));
+
+  return new_var;
+}
+
+
+
 /* Returns the encoding of values of variable VAR.  (This is actually a
    property of the dictionary.)  Returns null if no specific encoding has been
    set.  */

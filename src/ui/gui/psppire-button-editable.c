@@ -41,7 +41,7 @@ enum
   {
     PROP_0,
     PROP_PATH,
-    PROP_SLASH
+    PROP_EDITING_CANCELED
   };
 
 static void
@@ -59,8 +59,7 @@ psppire_button_editable_set_property (GObject      *object,
       obj->path = g_value_dup_string (value);
       break;
 
-    case PROP_SLASH:
-      psppire_button_editable_set_slash (obj, g_value_get_boolean (value));
+    case PROP_EDITING_CANCELED:
       break;
 
     default:
@@ -83,8 +82,8 @@ psppire_button_editable_get_property (GObject      *object,
       g_value_set_string (value, obj->path);
       break;
 
-    case PROP_SLASH:
-      g_value_set_boolean (value, psppire_button_editable_get_slash (obj));
+    case PROP_EDITING_CANCELED:
+      g_value_set_boolean (value, FALSE);
       break;
 
     default:
@@ -94,14 +93,13 @@ psppire_button_editable_get_property (GObject      *object,
 }
 
 static void
-psppire_button_editable_dispose (GObject *gobject)
+psppire_button_editable_finalize (GObject *gobject)
 {
   PsppireButtonEditable *obj = PSPPIRE_BUTTON_EDITABLE (gobject);
 
   g_free (obj->path);
-  obj->path = NULL;
 
-  G_OBJECT_CLASS (psppire_button_editable_parent_class)->dispose (gobject);
+  G_OBJECT_CLASS (psppire_button_editable_parent_class)->finalize (gobject);
 }
 
 static gboolean
@@ -110,32 +108,10 @@ psppire_button_editable_button_release (GtkWidget      *widget,
 {
   if (event->button == 1)
     {
-      g_signal_emit_by_name (widget, "button-release-event", event, NULL);
+      g_signal_emit_by_name (widget, "released", event, NULL);
     }
 
   return TRUE;
-}
-
-static gboolean
-psppire_button_editable_expose_event (GtkWidget      *widget,
-                                      GdkEventExpose *event)
-{
-  GtkWidgetClass *widget_class;
-  GtkStyle *style = gtk_widget_get_style (widget);
-  GtkAllocation allocation;
-  gboolean retval;
-
-  widget_class = GTK_WIDGET_CLASS (psppire_button_editable_parent_class);
-  retval = widget_class->expose_event (widget, event);
-
-  gtk_widget_get_allocation (widget, &allocation);
-  if (PSPPIRE_BUTTON_EDITABLE (widget)->slash)
-    gdk_draw_line (gtk_widget_get_window (widget), style->black_gc,
-                   allocation.x,
-                   allocation.y + allocation.height,
-                   allocation.x + allocation.width,
-                   allocation.y);
-  return retval;
 }
 
 static void
@@ -149,10 +125,9 @@ psppire_button_editable_class_init (PsppireButtonEditableClass *class)
 
   gobject_class->set_property = psppire_button_editable_set_property;
   gobject_class->get_property = psppire_button_editable_get_property;
-  gobject_class->dispose = psppire_button_editable_dispose;
+  gobject_class->finalize = psppire_button_editable_finalize;
 
   widget_class->button_release_event = psppire_button_editable_button_release;
-  widget_class->expose_event = psppire_button_editable_expose_event;
 
   g_object_class_install_property (gobject_class,
                                    PROP_PATH,
@@ -162,21 +137,15 @@ psppire_button_editable_class_init (PsppireButtonEditableClass *class)
 							"",
 							G_PARAM_READWRITE));
 
-  g_object_class_install_property (gobject_class,
-                                   PROP_SLASH,
-                                   g_param_spec_boolean ("slash",
-                                                         _("Diagonal slash"),
-                                                         _("Whether to draw a diagonal slash across the button."),
-                                                         FALSE,
-                                                         G_PARAM_READWRITE));
-
+  g_object_class_override_property (gobject_class,
+                                   PROP_EDITING_CANCELED,
+                                    "editing-canceled");
 }
 
 static void
 psppire_button_editable_init (PsppireButtonEditable *obj)
 {
   obj->path = g_strdup ("");
-  obj->slash = FALSE;
 }
 
 PsppireButtonEditable *
@@ -185,24 +154,6 @@ psppire_button_editable_new (void)
   return PSPPIRE_BUTTON_EDITABLE (g_object_new (PSPPIRE_TYPE_BUTTON_EDITABLE, NULL));
 }
 
-void
-psppire_button_editable_set_slash (PsppireButtonEditable *button,
-                                   gboolean slash)
-{
-  g_return_if_fail (button != NULL);
-  if ((button->slash != 0) != (slash != 0))
-    {
-      button->slash = slash;
-      gtk_widget_queue_draw (GTK_WIDGET (button));
-    }
-}
-
-gboolean
-psppire_button_editable_get_slash (const PsppireButtonEditable *button)
-{
-  g_return_val_if_fail (button != NULL, FALSE);
-  return button->slash;
-}
 
 /* GtkCellEditable interface. */
 

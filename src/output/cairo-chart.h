@@ -74,7 +74,7 @@ void xrchart_geometry_init (cairo_t *, struct xrchart_geometry *,
                             double width, double length);
 void xrchart_geometry_free (cairo_t *, struct xrchart_geometry *);
 
-#define XRCHART_N_COLOURS 9
+#define XRCHART_N_COLOURS 27
 extern const struct xrchart_colour data_colour[];
 
 enum tick_orientation
@@ -172,6 +172,8 @@ void xrchart_draw_np_plot (const struct chart_item *, cairo_t *,
 void xrchart_draw_scree (const struct chart_item *, cairo_t *,
                          struct xrchart_geometry *);
 void xrchart_draw_spreadlevel (const struct chart_item *, cairo_t *,
+                         struct xrchart_geometry *);
+void xrchart_draw_scatterplot (const struct chart_item *, cairo_t *,
                          struct xrchart_geometry *);
 
 

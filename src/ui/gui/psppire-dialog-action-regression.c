@@ -27,7 +27,7 @@
 
 #include "psppire-dialog.h"
 #include "builder-wrapper.h"
-#include "checkbox-treeview.h"
+#include "psppire-checkbox-treeview.h"
 #include "psppire-dict.h"
 #include "libpspp/str.h"
 
@@ -36,14 +36,16 @@
 #define N_(msgid) msgid
 
 
-#define REGRESSION_STATS			  \
-  RG (COEFF, N_("Coeff"))                         \
-  RG (R, N_("R"))				  \
-  RG (ANOVA, N_("Anova"))			  \
-  RG (BCOV, N_("Bcov"))
+#define REGRESSION_STATS       \
+  RG (COEFF, N_("Coeff"),          N_("Show the regression coefficients"))	\
+  RG (CI,    N_("Conf. Interval"), N_("Show the confidence interval for the regression coefficients"))   \
+  RG (R,     N_("R"),              N_("Show the correlation between observed and predicted values")) \
+  RG (ANOVA, N_("Anova"),          N_("Show the analysis of variance table"))  \
+  RG (BCOV,  N_("Bcov"),           N_("Show the variance coefficient matrix"))
+
 enum
   {
-#define RG(NAME, LABEL) RG_##NAME,
+#define RG(NAME, LABEL, TOOLTIP) RG_##NAME,
     REGRESSION_STATS
 #undef RG
     N_REGRESSION_STATS
@@ -51,7 +53,7 @@ enum
 
 enum
   {
-#define RG(NAME, LABEL) B_RG_##NAME = 1u << RG_##NAME,
+#define RG(NAME, LABEL, TOOLTIP) B_RG_##NAME = 1u << RG_##NAME,
     REGRESSION_STATS
 #undef RG
     B_RG_STATS_ALL = (1u << N_REGRESSION_STATS) - 1,
@@ -60,7 +62,7 @@ enum
 
 static const struct checkbox_entry_item stats[] =
   {
-#define RG(NAME, LABEL) {#NAME, LABEL},
+#define RG(NAME, LABEL, TOOLTIP) {#NAME, LABEL, TOOLTIP},
     REGRESSION_STATS
 #undef RG
   };
@@ -162,10 +164,10 @@ psppire_dialog_action_regression_activate (GtkAction *a)
 
   g_object_unref (xml);
 
-  put_checkbox_items_in_treeview (GTK_TREE_VIEW (act->stat_view),
-				  B_RG_STATS_DEFAULT,
-				  N_REGRESSION_STATS,
-				  stats);
+  psppire_checkbox_treeview_populate (PSPPIRE_CHECKBOX_TREEVIEW (act->stat_view),
+  				  B_RG_STATS_DEFAULT,
+  				  N_REGRESSION_STATS,
+  				  stats);
 
   psppire_dialog_action_set_refresh (pda, refresh);
 

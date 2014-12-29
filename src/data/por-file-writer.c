@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 1997-9, 2000, 2006, 2009, 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 1997-9, 2000, 2006, 2009, 2010, 2011, 2012, 2013 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -74,7 +74,7 @@ struct pfm_writer
 struct pfm_var
   {
     int width;                  /* 0=numeric, otherwise string var width. */
-    int fv;                     /* Starting case index. */
+    int case_index;             /* Index in case. */
   };
 
 static const struct casewriter_class por_file_casewriter_class;
@@ -131,7 +131,7 @@ pfm_open_writer (struct file_handle *fh, struct dictionary *dict,
       const struct variable *dv = dict_get_var (dict, i);
       struct pfm_var *pv = &w->vars[i];
       pv->width = MIN (var_get_width (dv), MAX_POR_WIDTH);
-      pv->fv = var_get_case_index (dv);
+      pv->case_index = var_get_case_index (dv);
     }
 
   w->digits = opts.digits;
@@ -336,7 +336,9 @@ write_variables (struct pfm_writer *w, struct dictionary *dict)
   
   buf_write (w, "4", 1);
   write_int (w, dict_get_var_cnt (dict));
-  write_int (w, 161);
+
+  buf_write (w, "5", 1);
+  write_int (w, ceil (w->digits * (log (10) / log (30))));
 
   for (i = 0; i < dict_get_var_cnt (dict); i++)
     {
@@ -456,11 +458,11 @@ por_file_casewriter_write (struct casewriter *writer, void *w_,
           struct pfm_var *v = &w->vars[i];
 
           if (v->width == 0)
-            write_float (w, case_num_idx (c, v->fv));
+            write_float (w, case_num_idx (c, v->case_index));
           else
             {
               write_int (w, v->width);
-              buf_write (w, case_str_idx (c, v->fv), v->width);
+              buf_write (w, case_str_idx (c, v->case_index), v->width);
             }
         }
     }

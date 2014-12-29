@@ -1,5 +1,5 @@
 /* PSPP - a program for statistical analysis.
-   Copyright (C) 1997-9, 2000, 2007, 2009, 2010, 2011, 2012 Free Software Foundation, Inc.
+   Copyright (C) 1997-9, 2000, 2007, 2009, 2010, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -48,7 +48,6 @@
 #include "output/table-item.h"
 #include "output/text-item.h"
 
-#include "gl/error.h"
 #include "gl/minmax.h"
 #include "gl/xalloc.h"
 
@@ -120,13 +119,14 @@ static const ucs4_t unicode_box_chars[N_BOX] =
     0x2564, 0x256a, 0x256c,
     0x2564, 0x256a, 0x256c,
     0x2554, 0x2560, 0x2560,
+    0x2560, 0x256c, 0x256c,
     0x2566, 0x256c, 0x256c,
   };
 
 static inline int
 make_box_index (int left, int right, int top, int bottom)
 {
-  return ((right * 3 + bottom) * 3 + left) * 3 + top;
+  return ((right * RENDER_N_LINES + bottom) * RENDER_N_LINES + left) * RENDER_N_LINES + top;
 }
 
 /* How to emphasize text. */
@@ -150,6 +150,12 @@ struct ascii_driver
     enum emphasis_style emphasis; /* How to emphasize text. */
     char *chart_file_name;      /* Name of files used for charts. */
 
+#ifdef HAVE_CAIRO
+    /* Colours for charts */
+    struct xr_color fg;
+    struct xr_color bg;
+#endif
+
     int width;                  /* Page width. */
     int length;                 /* Page length minus margins and header. */
     bool auto_width;            /* Use viewwidth as page width? */
@@ -157,6 +163,8 @@ struct ascii_driver
 
     int top_margin;		/* Top margin in lines. */
     int bottom_margin;		/* Bottom margin in lines. */
+
+    int min_break[TABLE_N_AXES]; /* Min cell size to break across pages. */
 
     const ucs4_t *box;          /* Line & box drawing characters. */
 
@@ -171,7 +179,7 @@ struct ascii_driver
     struct u8_line *lines;      /* Page content. */
     int allocated_lines;        /* Number of lines allocated. */
     int chart_cnt;              /* Number of charts so far. */
-    int y;
+    int x, y;
   };
 
 static const struct output_driver_class ascii_driver_class;
@@ -189,11 +197,11 @@ static bool ascii_open_page (struct ascii_driver *);
 static void ascii_draw_line (void *, int bb[TABLE_N_AXES][2],
                              enum render_line_style styles[TABLE_N_AXES][2]);
 static void ascii_measure_cell_width (void *, const struct table_cell *,
-                                      int *min, int *max);
+                                      int footnote_idx, int *min, int *max);
 static int ascii_measure_cell_height (void *, const struct table_cell *,
-                                      int width);
+                                      int footnote_idx, int width);
 static void ascii_draw_cell (void *, const struct table_cell *,
-                             int bb[TABLE_N_AXES][2],
+                             int footnote_idx, int bb[TABLE_N_AXES][2],
                              int clip[TABLE_N_AXES][2]);
 
 static void
@@ -229,6 +237,7 @@ ascii_create (const char *file_name, enum settings_output_devices device_type,
               struct string_map *o)
 {
   enum { BOX_ASCII, BOX_UNICODE } box;
+  int min_break[TABLE_N_AXES];
   struct output_driver *d;
   struct ascii_driver *a;
   int paper_length;
@@ -251,12 +260,20 @@ ascii_create (const char *file_name, enum settings_output_devices device_type,
   a->top_margin = parse_int (opt (d, o, "top-margin", "0"), 0, INT_MAX);
   a->bottom_margin = parse_int (opt (d, o, "bottom-margin", "0"), 0, INT_MAX);
 
+  min_break[H] = parse_int (opt (d, o, "min-hbreak", "-1"), -1, INT_MAX);
+  min_break[V] = parse_int (opt (d, o, "min-vbreak", "-1"), -1, INT_MAX);
+
   a->width = parse_page_size (opt (d, o, "width", "79"));
   paper_length = parse_page_size (opt (d, o, "length", "66"));
   a->auto_width = a->width < 0;
   a->auto_length = paper_length < 0;
   a->length = paper_length - vertical_margins (a);
-
+  a->min_break[H] = min_break[H] >= 0 ? min_break[H] : a->width / 2;
+  a->min_break[V] = min_break[V] >= 0 ? min_break[V] : a->length / 2;
+#ifdef HAVE_CAIRO
+  parse_color (d, o, "background-color", "#FFFFFFFFFFFF", &a->bg);
+  parse_color (d, o, "foreground-color", "#000000000000", &a->fg);
+#endif
   box = parse_enum (opt (d, o, "box", "ascii"),
                     "ascii", BOX_ASCII,
                     "unicode", BOX_UNICODE,
@@ -303,7 +320,7 @@ parse_page_size (struct driver_option *option)
           if (dim >= 1 && errno != ERANGE && *tail == '\0')
             dim = value;
           else
-            error (0, 0, _("%s: %s must be positive integer or `auto'"),
+            msg (MW, _("%s: %s must be positive integer or `auto'"),
                    option->driver_name, option->name);
         }
     }
@@ -335,7 +352,7 @@ update_page_size (struct ascii_driver *a, bool issue_error)
   if (a->width < MIN_WIDTH || a->length < MIN_LENGTH)
     {
       if (issue_error)
-        error (0, 0,
+        msg (ME,
                _("ascii: page excluding margins and headers "
                  "must be at least %d characters wide by %d lines long, but "
                  "as configured is only %d characters by %d lines"),
@@ -384,50 +401,29 @@ ascii_flush (struct output_driver *driver)
       ascii_close_page (a);
 
       if (fn_close (a->file_name, a->file) != 0)
-        error (0, errno, _("ascii: closing output file `%s'"),
-               a->file_name);
+        msg_error (errno, _("ascii: closing output file `%s'"), a->file_name);
       a->file = NULL;
     }
-}
-
-static void
-ascii_init_caption_cell (const char *caption, struct table_cell *cell)
-{
-  cell->contents = caption;
-  cell->options = TAB_LEFT;
-  cell->destructor = NULL;
 }
 
 static void
 ascii_output_table_item (struct ascii_driver *a,
                          const struct table_item *table_item)
 {
-  const char *caption = table_item_get_caption (table_item);
   struct render_params params;
-  struct render_page *page;
-  struct render_break x_break;
-  int caption_height;
+  struct render_pager *p;
   int i;
 
   update_page_size (a, false);
 
-  if (caption != NULL)
-    {
-      /* XXX doesn't do well with very large captions */
-      struct table_cell cell;
-      ascii_init_caption_cell (caption, &cell);
-      caption_height = ascii_measure_cell_height (a, &cell, a->width);
-    }
-  else
-    caption_height = 0;
-
   params.draw_line = ascii_draw_line;
   params.measure_cell_width = ascii_measure_cell_width;
   params.measure_cell_height = ascii_measure_cell_height;
-  params.draw_cell = ascii_draw_cell,
-    params.aux = a;
+  params.adjust_break = NULL;
+  params.draw_cell = ascii_draw_cell;
+  params.aux = a;
   params.size[H] = a->width;
-  params.size[V] = a->length - caption_height;
+  params.size[V] = a->length;
   params.font_size[H] = 1;
   params.font_size[V] = 1;
   for (i = 0; i < RENDER_N_LINES; i++)
@@ -436,59 +432,31 @@ ascii_output_table_item (struct ascii_driver *a,
       params.line_widths[H][i] = width;
       params.line_widths[V][i] = width;
     }
+  for (i = 0; i < TABLE_N_AXES; i++)
+    params.min_break[i] = a->min_break[i];
 
   if (a->file == NULL && !ascii_open_page (a))
     return;
 
-  page = render_page_create (&params, table_item_get_table (table_item));
-  for (render_break_init (&x_break, page, H);
-       render_break_has_next (&x_break); )
+  p = render_pager_create (&params, table_item);
+  while (render_pager_has_next (p))
     {
-      struct render_page *x_slice;
-      struct render_break y_break;
+      int used;
 
-      x_slice = render_break_next (&x_break, a->width);
-      for (render_break_init (&y_break, x_slice, V);
-           render_break_has_next (&y_break); )
+      if (a->y > 0)
+        a->y++;
+      used = render_pager_draw_next (p, a->length - a->y);
+      if (used == 0)
         {
-          struct render_page *y_slice;
-          int space;
-
-          if (a->y > 0)
-            a->y++;
-
-          space = a->length - a->y - caption_height;
-          if (render_break_next_size (&y_break) > space)
-            {
-              assert (a->y > 0);
-              ascii_close_page (a);
-              if (!ascii_open_page (a))
-                return;
-              continue;
-            }
-
-          y_slice = render_break_next (&y_break, space);
-          if (caption_height)
-            {
-              struct table_cell cell;
-              int bb[TABLE_N_AXES][2];
-
-              ascii_init_caption_cell (caption, &cell);
-              bb[H][0] = 0;
-              bb[H][1] = a->width;
-              bb[V][0] = 0;
-              bb[V][1] = caption_height;
-              ascii_draw_cell (a, &cell, bb, bb);
-              a->y += caption_height;
-              caption_height = 0;
-            }
-          render_page_draw (y_slice);
-          a->y += render_page_get_size (y_slice, V);
-          render_page_unref (y_slice);
+          assert (a->y > 0);
+          ascii_close_page (a);
+          if (!ascii_open_page (a))
+            break;
         }
-      render_break_destroy (&y_break);
+      else
+        a->y += used;
     }
-  render_break_destroy (&x_break);
+  render_pager_destroy (p);
 }
 
 static void
@@ -496,7 +464,8 @@ ascii_output_text (struct ascii_driver *a, const char *text)
 {
   struct table_item *table_item;
 
-  table_item = table_item_create (table_from_string (TAB_LEFT, text), NULL);
+  table_item = table_item_create (table_from_string (TAB_LEFT, text),
+                                  NULL, NULL);
   ascii_output_table_item (a, table_item);
   table_item_unref (table_item);
 }
@@ -521,7 +490,9 @@ ascii_submit (struct output_driver *driver,
       char *file_name;
 
       file_name = xr_draw_png_chart (chart_item, a->chart_file_name,
-                                     a->chart_cnt++);
+                                     a->chart_cnt++,
+				     &a->fg, 
+				     &a->bg);
       if (file_name != NULL)
         {
           struct text_item *text_item;
@@ -599,6 +570,7 @@ static char *ascii_reserve (struct ascii_driver *, int y, int x0, int x1,
                             int n);
 static void ascii_layout_cell (struct ascii_driver *,
                                const struct table_cell *,
+                               int footnote_idx,
                                int bb[TABLE_N_AXES][2],
                                int clip[TABLE_N_AXES][2],
                                int *width, int *height);
@@ -609,23 +581,24 @@ ascii_draw_line (void *a_, int bb[TABLE_N_AXES][2],
 {
   struct ascii_driver *a = a_;
   char mbchar[6];
-  int x0, x1, y1;
+  int x0, y0, x1, y1;
   ucs4_t uc;
   int mblen;
   int x, y;
 
   /* Clip to the page. */
-  if (bb[H][0] >= a->width || bb[V][0] + a->y >= a->length)
-    return;
-  x0 = bb[H][0];
-  x1 = MIN (bb[H][1], a->width);
+  x0 = MAX (bb[H][0] + a->x, 0);
+  y0 = MAX (bb[V][0] + a->y, 0);
+  x1 = MIN (bb[H][1] + a->x, a->width);
   y1 = MIN (bb[V][1] + a->y, a->length);
+  if (x1 <= 0 || y1 <= 0 || x0 >= a->width || y0 >= a->length)
+    return;
 
   /* Draw. */
   uc = a->box[make_box_index (styles[V][0], styles[V][1],
                               styles[H][0], styles[H][1])];
   mblen = u8_uctomb (CHAR_CAST (uint8_t *, mbchar), uc, 6);
-  for (y = bb[V][0] + a->y; y < y1; y++)
+  for (y = y0; y < y1; y++)
     {
       char *p = ascii_reserve (a, y, x0, x1, mblen * (x1 - x0));
       for (x = x0; x < x1; x++)
@@ -638,7 +611,7 @@ ascii_draw_line (void *a_, int bb[TABLE_N_AXES][2],
 
 static void
 ascii_measure_cell_width (void *a_, const struct table_cell *cell,
-                          int *min_width, int *max_width)
+                          int footnote_idx, int *min_width, int *max_width)
 {
   struct ascii_driver *a = a_;
   int bb[TABLE_N_AXES][2];
@@ -650,19 +623,23 @@ ascii_measure_cell_width (void *a_, const struct table_cell *cell,
   bb[V][0] = 0;
   bb[V][1] = INT_MAX;
   clip[H][0] = clip[H][1] = clip[V][0] = clip[V][1] = 0;
-  ascii_layout_cell (a, cell, bb, clip, max_width, &h);
+  ascii_layout_cell (a, cell, footnote_idx, bb, clip, max_width, &h);
 
-  if (strchr (cell->contents, ' '))
+  if (cell->n_contents != 1
+      || cell->contents[0].table
+      || cell->contents[0].n_footnotes
+      || strchr (cell->contents[0].text, ' '))
     {
       bb[H][1] = 1;
-      ascii_layout_cell (a, cell, bb, clip, min_width, &h);
+      ascii_layout_cell (a, cell, footnote_idx, bb, clip, min_width, &h);
     }
   else
     *min_width = *max_width;
 }
 
 static int
-ascii_measure_cell_height (void *a_, const struct table_cell *cell, int width)
+ascii_measure_cell_height (void *a_, const struct table_cell *cell,
+                           int footnote_idx, int width)
 {
   struct ascii_driver *a = a_;
   int bb[TABLE_N_AXES][2];
@@ -674,18 +651,18 @@ ascii_measure_cell_height (void *a_, const struct table_cell *cell, int width)
   bb[V][0] = 0;
   bb[V][1] = INT_MAX;
   clip[H][0] = clip[H][1] = clip[V][0] = clip[V][1] = 0;
-  ascii_layout_cell (a, cell, bb, clip, &w, &h);
+  ascii_layout_cell (a, cell, footnote_idx, bb, clip, &w, &h);
   return h;
 }
 
 static void
-ascii_draw_cell (void *a_, const struct table_cell *cell,
+ascii_draw_cell (void *a_, const struct table_cell *cell, int footnote_idx,
                  int bb[TABLE_N_AXES][2], int clip[TABLE_N_AXES][2])
 {
   struct ascii_driver *a = a_;
   int w, h;
 
-  ascii_layout_cell (a, cell, bb, clip, &w, &h);
+  ascii_layout_cell (a, cell, footnote_idx, bb, clip, &w, &h);
 }
 
 static char *
@@ -700,9 +677,9 @@ text_draw (struct ascii_driver *a, unsigned int options,
            int bb[TABLE_N_AXES][2], int clip[TABLE_N_AXES][2],
            int y, const uint8_t *string, int n, size_t width)
 {
-  int x0 = MAX (0, clip[H][0]);
+  int x0 = MAX (0, clip[H][0] + a->x);
   int y0 = MAX (0, clip[V][0] + a->y);
-  int x1 = clip[H][1];
+  int x1 = MIN (a->width, clip[H][1] + a->x);
   int y1 = MIN (a->length, clip[V][1] + a->y);
   int x;
 
@@ -724,6 +701,7 @@ text_draw (struct ascii_driver *a, unsigned int options,
     default:
       NOT_REACHED ();
     }
+  x += a->x;
   if (x >= x1)
     return;
 
@@ -823,22 +801,46 @@ text_draw (struct ascii_driver *a, unsigned int options,
     }
 }
 
-static void
-ascii_layout_cell (struct ascii_driver *a, const struct table_cell *cell,
-                   int bb[TABLE_N_AXES][2], int clip[TABLE_N_AXES][2],
-                   int *widthp, int *heightp)
+static int
+ascii_layout_cell_text (struct ascii_driver *a,
+                        const struct cell_contents *contents, int *footnote_idx,
+                        int bb[TABLE_N_AXES][2], int clip[TABLE_N_AXES][2],
+                        int *widthp)
 {
-  const char *text = cell->contents;
-  size_t length = strlen (text);
+  size_t length;
+  const char *text;
   char *breaks;
   int bb_width;
   size_t pos;
   int y;
 
-  *widthp = 0;
-  *heightp = 0;
-  if (length == 0)
-    return;
+  y = bb[V][0];
+  length = strlen (contents->text);
+  if (contents->n_footnotes)
+    {
+      struct string s;
+      int i;
+
+      ds_init_empty (&s);
+      ds_extend (&s, length + contents->n_footnotes * 4);
+      ds_put_cstr (&s, contents->text);
+      for (i = 0; i < contents->n_footnotes; i++)
+        {
+          char marker[10];
+
+          str_format_26adic (++*footnote_idx, false, marker, sizeof marker);
+          ds_put_format (&s, "[%s]", marker);
+        }
+
+      length = ds_length (&s);
+      text = ds_steal_cstr (&s);
+    }
+  else
+    {
+      if (length == 0)
+        return y;
+      text = contents->text;
+    }
 
   breaks = xmalloc (length + 1);
   u8_possible_linebreaks (CHAR_CAST (const uint8_t *, text), length,
@@ -857,6 +859,7 @@ ascii_layout_cell (struct ascii_driver *a, const struct table_cell *cell,
       size_t last_break_ofs = 0;
       int last_break_width = 0;
       int width = 0;
+      size_t graph_ofs;
       size_t ofs;
 
       for (ofs = 0; ofs < n; )
@@ -892,29 +895,132 @@ ascii_layout_cell (struct ascii_driver *a, const struct table_cell *cell,
             }
           ofs += mblen;
         }
-      if (b[ofs] != UC_BREAK_MANDATORY)
-        {
-          while (ofs > 0 && isspace (line[ofs - 1]))
-            {
-              ofs--;
-              width--;
-            }
-        }
-      if (width > *widthp)
-        *widthp = width;
+
+      /* Trim any trailing spaces off the end of the text to be drawn. */
+      for (graph_ofs = ofs; graph_ofs > 0; graph_ofs--)
+        if (!isspace (line[graph_ofs - 1]))
+          break;
+      width -= ofs - graph_ofs;
 
       /* Draw text. */
-      text_draw (a, cell->options, bb, clip, y, line, ofs, width);
+      text_draw (a, contents->options, bb, clip, y, line, graph_ofs, width);
 
-      /* Next line. */
+      /* If a new-line ended the line, just skip the new-line.  Otherwise, skip
+         past any spaces past the end of the line (but not past a new-line). */
+      if (b[ofs] == UC_BREAK_MANDATORY)
+        ofs++;
+      else
+        while (ofs < n && isspace (line[ofs]) && b[ofs] != UC_BREAK_MANDATORY)
+          ofs++;
+
+      if (width > *widthp)
+        *widthp = width;
       pos += ofs;
-      if (ofs < n && isspace (line[ofs]))
-        pos++;
-
     }
-  *heightp = y - bb[V][0];
 
   free (breaks);
+  if (text != contents->text)
+    free (CONST_CAST (char *, text));
+
+  return y;
+}
+
+static int
+ascii_layout_subtable (struct ascii_driver *a,
+                       const struct cell_contents *contents,
+                       int *footnote_idx UNUSED /* XXX */,
+                       int bb[TABLE_N_AXES][2], int clip[TABLE_N_AXES][2] UNUSED,
+                       int *widthp)
+{
+  struct render_params params;
+  struct render_pager *p;
+  int r[TABLE_N_AXES][2];
+  int width, height;
+  int i;
+
+  params.draw_line = ascii_draw_line;
+  params.measure_cell_width = ascii_measure_cell_width;
+  params.measure_cell_height = ascii_measure_cell_height;
+  params.adjust_break = NULL;
+  params.draw_cell = ascii_draw_cell,
+  params.aux = a;
+  params.size[H] = bb[TABLE_HORZ][1] - bb[TABLE_HORZ][0];
+  params.size[V] = bb[TABLE_VERT][1] - bb[TABLE_VERT][0];
+  params.font_size[H] = 1;
+  params.font_size[V] = 1;
+  for (i = 0; i < RENDER_N_LINES; i++)
+    {
+      int width = i == RENDER_LINE_NONE ? 0 : 1;
+      params.line_widths[H][i] = width;
+      params.line_widths[V][i] = width;
+    }
+
+  p = render_pager_create (&params, contents->table);
+  width = render_pager_get_size (p, TABLE_HORZ);
+  height = render_pager_get_size (p, TABLE_VERT);
+
+  /* r = intersect(bb, clip) - bb. */
+  for (i = 0; i < TABLE_N_AXES; i++)
+    {
+      r[i][0] = MAX (bb[i][0], clip[i][0]) - bb[i][0];
+      r[i][1] = MIN (bb[i][1], clip[i][1]) - bb[i][0];
+    }
+
+  if (r[H][0] < r[H][1] && r[V][0] < r[V][1])
+    {
+      unsigned int alignment = contents->options & TAB_ALIGNMENT;
+      int save_x = a->x;
+
+      a->x += bb[TABLE_HORZ][0];
+      if (alignment == TAB_RIGHT)
+        a->x += params.size[H] - width;
+      else if (alignment == TAB_CENTER)
+        a->x += (params.size[H] - width) / 2;
+      a->y += bb[TABLE_VERT][0];
+      render_pager_draw (p);
+      a->y -= bb[TABLE_VERT][0];
+      a->x = save_x;
+    }
+  render_pager_destroy (p);
+
+  if (width > *widthp)
+    *widthp = width;
+  return bb[V][0] + height;
+}
+
+static void
+ascii_layout_cell (struct ascii_driver *a, const struct table_cell *cell,
+                   int footnote_idx,
+                   int bb_[TABLE_N_AXES][2], int clip[TABLE_N_AXES][2],
+                   int *widthp, int *heightp)
+{
+  int bb[TABLE_N_AXES][2];
+  size_t i;
+
+  *widthp = 0;
+  *heightp = 0;
+
+  memcpy (bb, bb_, sizeof bb);
+  for (i = 0; i < cell->n_contents && bb[V][0] < bb[V][1]; i++)
+    {
+      const struct cell_contents *contents = &cell->contents[i];
+
+      /* Put a blank line between contents. */
+      if (i > 0)
+        {
+          bb[V][0]++;
+          if (bb[V][0] >= bb[V][1])
+            break;
+        }
+
+      if (contents->text)
+        bb[V][0] = ascii_layout_cell_text (a, contents, &footnote_idx,
+                                           bb, clip, widthp);
+      else
+        bb[V][0] = ascii_layout_subtable (a, contents, &footnote_idx,
+                                          bb, clip, widthp);
+    }
+  *heightp = bb[V][0] - bb_[V][0];
 }
 
 void
@@ -922,6 +1028,7 @@ ascii_test_write (struct output_driver *driver,
                   const char *s, int x, int y, unsigned int options)
 {
   struct ascii_driver *a = ascii_driver_cast (driver);
+  struct cell_contents contents;
   struct table_cell cell;
   int bb[TABLE_N_AXES][2];
   int width, height;
@@ -930,16 +1037,21 @@ ascii_test_write (struct output_driver *driver,
     return;
   a->y = 0;
 
+  contents.options = options | TAB_LEFT;
+  contents.text = CONST_CAST (char *, s);
+  contents.table = NULL;
+  contents.n_footnotes = 0;
+
   memset (&cell, 0, sizeof cell);
-  cell.contents = s;
-  cell.options = options | TAB_LEFT;
+  cell.contents = &contents;
+  cell.n_contents = 1;
 
   bb[TABLE_HORZ][0] = x;
   bb[TABLE_HORZ][1] = a->width;
   bb[TABLE_VERT][0] = y;
   bb[TABLE_VERT][1] = a->length;
 
-  ascii_layout_cell (a, &cell, bb, bb, &width, &height);
+  ascii_layout_cell (a, &cell, 0, bb, bb, &width, &height);
 
   a->y = 1;
 }
@@ -998,7 +1110,7 @@ ascii_open_page (struct ascii_driver *a)
         }
       else
         {
-          error (0, errno, _("ascii: opening output file `%s'"),
+          msg_error (errno, _("ascii: opening output file `%s'"),
                  a->file_name);
           a->error = true;
           return false;
