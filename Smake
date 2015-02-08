@@ -348,13 +348,13 @@ prep_ph:
 aclocal.m4:
 	aclocal -I m4 -I gl/m4
 
-configure: configure.ac aclocal.m4
+configure: configure.ac aclocal.m4 
 	autoconf
 
 config.h.in: configure.ac
 	autoheader
 
-Makefile.in: Makefile.am config.h.in aclocal.m4 src/ui/gui/icons/manifest
+Makefile.in: Makefile.am config.h.in aclocal.m4 src/ui/gui/icons/manifest doc/png_manifest doc/eps_manifest doc/txt_manifest
 	automake --add-missing --copy --no-force --include-deps
 
 
