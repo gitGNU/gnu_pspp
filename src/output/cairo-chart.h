@@ -118,12 +118,12 @@ void xrchart_write_title (cairo_t *, const struct xrchart_geometry *,
 
 /* Set the scale for the abscissa */
 void xrchart_write_xscale (cairo_t *, struct xrchart_geometry *,
-                           double min, double max, int ticks);
+                           double min, double max);
 
 
 /* Set the scale for the ordinate */
 void xrchart_write_yscale (cairo_t *, struct xrchart_geometry *,
-                           double smin, double smax, int ticks);
+                           double smin, double smax);
 
 void xrchart_write_xlabel (cairo_t *, const struct xrchart_geometry *,
                            const char *label) ;
@@ -164,6 +164,8 @@ void xrchart_draw_boxplot (const struct chart_item *, cairo_t *,
 void xrchart_draw_roc (const struct chart_item *, cairo_t *,
                        struct xrchart_geometry *);
 void xrchart_draw_piechart (const struct chart_item *, cairo_t *,
+                            struct xrchart_geometry *);
+void xrchart_draw_barchart (const struct chart_item *, cairo_t *,
                             struct xrchart_geometry *);
 void xrchart_draw_histogram (const struct chart_item *, cairo_t *,
                              struct xrchart_geometry *);

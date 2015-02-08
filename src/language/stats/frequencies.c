@@ -1,6 +1,6 @@
 /*
   PSPP - a program for statistical analysis.
-  Copyright (C) 1997-9, 2000, 2007, 2009, 2010, 2011, 2014 Free Software Foundation, Inc.
+  Copyright (C) 1997-9, 2000, 2007, 2009, 2010, 2011, 2014, 2015 Free Software Foundation, Inc.
    
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -53,6 +53,7 @@
 
 
 #include "output/chart-item.h"
+#include "output/charts/barchart.h"
 #include "output/charts/piechart.h"
 #include "output/charts/plot-hist.h"
 #include "output/tab.h"
@@ -222,7 +223,7 @@ struct frq_proc
     int n_stats;
 
     /* Histogram and pie chart settings. */
-    struct frq_chart *hist, *pie;
+    struct frq_chart *hist, *pie, *bar;
   };
 
 
@@ -239,6 +240,10 @@ static void calc_stats (const struct var_freqs *vf, double d[FRQ_ST_count]);
 
 static void do_piechart(const struct frq_chart *pie, 
 			const struct variable *var,
+			const struct freq_tab *frq_tab);
+
+static void do_barchart(const struct frq_chart *bar,
+			const struct variable **var,
 			const struct freq_tab *frq_tab);
 
 static void dump_statistics (const struct frq_proc *frq, 
@@ -259,7 +264,7 @@ compare_freq (const void *a_, const void *b_, const void *aux_)
     }
   else
     {
-      int cmp = value_compare_3way (&a->value, &b->value, aux->width);
+      int cmp = value_compare_3way (a->values, b->values, aux->width);
       return aux->ascending_value ? cmp : -cmp;
     }
 }
@@ -312,11 +317,11 @@ dump_freq_table (const struct var_freqs *vf, const struct variable *wv)
       valid_percent = f->count / ft->valid_cases * 100.0;
       cum_total += valid_percent;
 
-      label = var_lookup_value_label (vf->var, &f->value);
+      label = var_lookup_value_label (vf->var, f->values);
       if (label != NULL)
         tab_text (t, 0, r, TAB_LEFT, label);
 
-      tab_value (t, 1, r, TAB_NONE, &f->value, vf->var, NULL);
+      tab_value (t, 1, r, TAB_NONE, f->values, vf->var, NULL);
       tab_double (t, 2, r, TAB_NONE, f->count, NULL, RC_WEIGHT);
       tab_double (t, 3, r, TAB_NONE, percent, NULL, RC_OTHER);
       tab_double (t, 4, r, TAB_NONE, valid_percent, NULL, RC_OTHER);
@@ -329,11 +334,11 @@ dump_freq_table (const struct var_freqs *vf, const struct variable *wv)
 
       cum_freq += f->count;
 
-      label = var_lookup_value_label (vf->var, &f->value);
+      label = var_lookup_value_label (vf->var, f->values);
       if (label != NULL)
         tab_text (t, 0, r, TAB_LEFT, label);
 
-      tab_value (t, 1, r, TAB_NONE, &f->value, vf->var, NULL);
+      tab_value (t, 1, r, TAB_NONE, f->values, vf->var, NULL);
       tab_double (t, 2, r, TAB_NONE, f->count, NULL, RC_WEIGHT);
       tab_double (t, 3, r, TAB_NONE,
 		  f->count / ft->total_cases * 100.0, NULL, RC_OTHER);
@@ -394,15 +399,15 @@ calc_percentiles (const struct frq_proc *frq, const struct var_freqs *vf)
             break;
 
           if (tp + 1 < rank || f + 1 >= ft->missing)
-            pc->value = f->value.f;
+            pc->value = f->values[0].f;
           else
-            pc->value = calc_percentile (pc->p, W, f->value.f, f[1].value.f);
+            pc->value = calc_percentile (pc->p, W, f->values[0].f, f[1].values[0].f);
         }
     }
   for (; percentile_idx < frq->n_percentiles; percentile_idx++)
     {
       struct percentile *pc = &frq->percentiles[percentile_idx];
-      pc->value = ft->valid[ft->n_valid - 1].value.f;
+      pc->value = ft->valid[ft->n_valid - 1].values[0].f;
     }
 }
 
@@ -414,7 +419,7 @@ not_missing (const void *f_, const void *v_)
   const struct freq *f = f_;
   const struct variable *v = v_;
 
-  return !var_is_value_missing (v, &f->value, MV_ANY);
+  return !var_is_value_missing (v, f->values, MV_ANY);
 }
 
 
@@ -563,6 +568,9 @@ postcalc (struct frq_proc *frq, const struct dataset *ds)
       if (frq->pie)
         do_piechart(frq->pie, vf->var, &vf->tab);
 
+      if (frq->bar)
+        do_barchart(frq->bar, &vf->var, &vf->tab);
+
       cleanup_freq_tab (vf);
     }
 }
@@ -580,7 +588,11 @@ cmd_frequencies (struct lexer *lexer, struct dataset *ds)
 
   double pie_min = -DBL_MAX;
   double pie_max = DBL_MAX;
-  bool pie_missing = false;
+  bool pie_missing = true;
+
+  double bar_min = -DBL_MAX;
+  double bar_max = DBL_MAX;
+  bool bar_freq = true;
 
   double hi_min = -DBL_MAX;
   double hi_max = DBL_MAX;
@@ -610,6 +622,7 @@ cmd_frequencies (struct lexer *lexer, struct dataset *ds)
 
   frq.hist = NULL;
   frq.pie = NULL;
+  frq.bar = NULL;
 
 
   /* Accept an optional, completely pointless "/VARIABLES=" */
@@ -785,7 +798,6 @@ cmd_frequencies (struct lexer *lexer, struct dataset *ds)
 	    {
 	      if (lex_match_id (lexer, "TABLE"))
 		{
-		  
 		}
 	      else if (lex_match_id (lexer, "NOTABLE"))
 		{
@@ -980,6 +992,66 @@ cmd_frequencies (struct lexer *lexer, struct dataset *ds)
 	    }
 	  sbc_piechart = true;
 	}
+      else if (lex_match_id (lexer, "BARCHART"))
+        {
+	  lex_match (lexer, T_EQUALS);
+	  while (lex_token (lexer) != T_ENDCMD
+		 && lex_token (lexer) != T_SLASH)
+	    {
+	      if (lex_match_id (lexer, "MINIMUM"))
+		{
+		  lex_force_match (lexer, T_LPAREN);
+		  if (lex_force_num (lexer))
+		    {
+		      bar_min = lex_number (lexer);
+		      lex_get (lexer);
+		    }
+		  lex_force_match (lexer, T_RPAREN);
+		}
+	      else if (lex_match_id (lexer, "MAXIMUM"))
+		{
+		  lex_force_match (lexer, T_LPAREN);
+		  if (lex_force_num (lexer))
+		    {
+		      bar_max = lex_number (lexer);
+		      lex_get (lexer);
+		    }
+ 		  lex_force_match (lexer, T_RPAREN);
+		}
+	      else if (lex_match_id (lexer, "FREQ"))
+		{
+		  if ( lex_match (lexer, T_LPAREN))
+		    {
+		      if (lex_force_num (lexer))
+			{
+			  lex_number (lexer);
+			  lex_get (lexer);
+			}
+		      lex_force_match (lexer, T_RPAREN);
+		    }
+		  bar_freq = true;
+		}
+	      else if (lex_match_id (lexer, "PERCENT"))
+		{
+		  if ( lex_match (lexer, T_LPAREN))
+		    {
+		      if (lex_force_num (lexer))
+			{
+			  lex_number (lexer);
+			  lex_get (lexer);
+			}
+		      lex_force_match (lexer, T_RPAREN);
+		    }
+		  bar_freq = false;
+		}
+	      else
+		{
+		  lex_error (lexer, NULL);
+		  goto error;
+		}
+	    }
+	  sbc_barchart = true;
+	}
       else if (lex_match_id (lexer, "MISSING"))
         {
 	  lex_match (lexer, T_EQUALS);
@@ -1024,9 +1096,6 @@ cmd_frequencies (struct lexer *lexer, struct dataset *ds)
 /* Figure out which charts the user requested.  */
 
   {
-    if (sbc_barchart)
-      msg (SW, _("Bar charts are not implemented."));
-
     if (sbc_histogram)
       {
 	struct frq_chart *hist;
@@ -1064,6 +1133,15 @@ cmd_frequencies (struct lexer *lexer, struct dataset *ds)
 	frq.percentiles[frq.n_percentiles + 1].show = false;
 	
 	frq.n_percentiles+=2;
+      }
+
+    if (sbc_barchart)
+      {
+	frq.bar = xmalloc (sizeof *frq.bar);
+	frq.bar->x_min = bar_min;
+	frq.bar->x_max = bar_max;
+	frq.bar->include_missing = false;
+	frq.bar->y_scale = bar_freq ? FRQ_FREQ : FRQ_PERCENT;
       }
 
     if (sbc_piechart)
@@ -1202,10 +1280,10 @@ freq_tab_to_hist (const struct frq_proc *frq, const struct freq_tab *ft,
   for (i = 0; i < ft->n_valid; i++)
     {
       const struct freq *f = &ft->valid[i];
-      if (chart_includes_value (frq->hist, var, &f->value))
+      if (chart_includes_value (frq->hist, var, f->values))
         {
-          x_min = MIN (x_min, f->value.f);
-          x_max = MAX (x_max, f->value.f);
+          x_min = MIN (x_min, f->values[0].f);
+          x_max = MAX (x_max, f->values[0].f);
           valid_freq += f->count;
         }
     }
@@ -1229,63 +1307,118 @@ freq_tab_to_hist (const struct frq_proc *frq, const struct freq_tab *ft,
   for (i = 0; i < ft->n_valid; i++)
     {
       const struct freq *f = &ft->valid[i];
-      if (chart_includes_value (frq->hist, var, &f->value))
-        histogram_add (histogram, f->value.f, f->count);
+      if (chart_includes_value (frq->hist, var, f->values))
+        histogram_add (histogram, f->values[0].f, f->count);
     }
 
   return histogram;
 }
 
-static int
-add_slice (const struct frq_chart *pie, const struct freq *freq,
-           const struct variable *var, struct slice *slice)
-{
-  if (chart_includes_value (pie, var, &freq->value))
-    {
-      ds_init_empty (&slice->label);
-      var_append_value_name (var, &freq->value, &slice->label);
-      slice->magnitude = freq->count;
-      return 1;
-    }
-  else
-    return 0;
-}
 
-/* Allocate an array of slices and fill them from the data in frq_tab
-   n_slices will contain the number of slices allocated.
+/* Allocate an array of struct freqs and fill them from the data in FRQ_TAB,
+   according to the parameters of CATCHART
+   N_SLICES will contain the number of slices allocated.
    The caller is responsible for freeing slices
 */
-static struct slice *
-freq_tab_to_slice_array(const struct frq_chart *pie,
-                        const struct freq_tab *frq_tab,
-			const struct variable *var,
-			int *n_slicesp)
+static struct freq *
+pick_cat_counts (const struct frq_chart *catchart,
+		 const struct freq_tab *frq_tab,
+		 int *n_slicesp)
 {
-  struct slice *slices;
-  int n_slices;
+  int n_slices = 0;
   int i;
-
-  slices = xnmalloc (frq_tab->n_valid + frq_tab->n_missing, sizeof *slices);
-  n_slices = 0;
-
+  struct freq *slices = xnmalloc (frq_tab->n_valid + frq_tab->n_missing, sizeof *slices);
+  
   for (i = 0; i < frq_tab->n_valid; i++)
-    n_slices += add_slice (pie, &frq_tab->valid[i], var, &slices[n_slices]);
-  for (i = 0; i < frq_tab->n_missing; i++)
-    n_slices += add_slice (pie, &frq_tab->missing[i], var, &slices[n_slices]);
+    {
+      const struct freq *f = &frq_tab->valid[i];
+      if (f->count > catchart->x_max)
+	continue;
+
+      if (f->count < catchart->x_min)
+	continue;
+      
+      slices[n_slices] = *f;
+      
+      n_slices++;
+    }
+
+  if (catchart->include_missing)
+    {
+      for (i = 0; i < frq_tab->n_missing; i++)
+	{
+	  const struct freq *f = &frq_tab->missing[i];
+	  slices[n_slices].count += f->count;
+	  
+	  if (i == 0)
+	    slices[n_slices].values[0] = f->values[0];
+	}
+      
+      if (frq_tab->n_missing > 0)
+	n_slices++;
+    }
 
   *n_slicesp = n_slices;
   return slices;
 }
 
 
+/* Allocate an array of struct freqs and fill them from the data in FRQ_TAB,
+   according to the parameters of CATCHART
+   N_SLICES will contain the number of slices allocated.
+   The caller is responsible for freeing slices
+*/
+static struct freq **
+pick_cat_counts_ptr (const struct frq_chart *catchart,
+		     const struct freq_tab *frq_tab,
+		     int *n_slicesp)
+{
+  int n_slices = 0;
+  int i;
+  struct freq **slices = xnmalloc (frq_tab->n_valid + frq_tab->n_missing, sizeof *slices);
+  
+  for (i = 0; i < frq_tab->n_valid; i++)
+    {
+      struct freq *f = &frq_tab->valid[i];
+      if (f->count > catchart->x_max)
+	continue;
+
+      if (f->count < catchart->x_min)
+	continue;
+      
+      slices[n_slices] = f;
+      
+      n_slices++;
+    }
+
+  if (catchart->include_missing)
+    {
+      for (i = 0; i < frq_tab->n_missing; i++)
+	{
+	  const struct freq *f = &frq_tab->missing[i];
+	  if (i == 0)
+	    {
+	      slices[n_slices] = xmalloc (sizeof (struct freq));
+	      slices[n_slices]->values[0] = f->values[0];
+	    }
+
+	  slices[n_slices]->count += f->count;
+	  
+	}
+    }
+
+  *n_slicesp = n_slices;
+  return slices;
+}
+
+
+
 static void
 do_piechart(const struct frq_chart *pie, const struct variable *var,
             const struct freq_tab *frq_tab)
 {
-  struct slice *slices;
-  int n_slices, i;
-
-  slices = freq_tab_to_slice_array (pie, frq_tab, var, &n_slices);
+  int n_slices;
+  struct freq *slices = pick_cat_counts (pie, frq_tab, &n_slices);
 
   if (n_slices < 2)
     msg (SW, _("Omitting pie chart for %s, which has only %d unique values."),
@@ -1294,12 +1427,25 @@ do_piechart(const struct frq_chart *pie, const struct variable *var,
     msg (SW, _("Omitting pie chart for %s, which has over 50 unique values."),
          var_get_name (var));
   else
-    chart_item_submit (piechart_create (var_to_string(var), slices, n_slices));
+    chart_item_submit (piechart_create (var, slices, n_slices));
 
-  for (i = 0; i < n_slices; i++)
-    ds_destroy (&slices[i].label);
   free (slices);
 }
+
+
+static void
+do_barchart(const struct frq_chart *bar, const struct variable **var,
+            const struct freq_tab *frq_tab)
+{
+  int n_slices;
+  struct freq **slices = pick_cat_counts_ptr (bar, frq_tab, &n_slices);
+
+  chart_item_submit (barchart_create (var, 1,
+				      (bar->y_scale == FRQ_FREQ) ? _("Count") : _("Percent"),
+				      slices, n_slices));
+  free (slices);
+}
+
 
 /* Calculates all the pertinent statistics for VF, putting them in array
    D[]. */
@@ -1319,7 +1465,7 @@ calc_stats (const struct var_freqs *vf, double d[FRQ_ST_count])
       if (most_often < f->count)
         {
           most_often = f->count;
-          X_mode = f->value.f;
+          X_mode = f->values[0].f;
         }
       else if (most_often == f->count)
         {
@@ -1332,16 +1478,16 @@ calc_stats (const struct var_freqs *vf, double d[FRQ_ST_count])
   /* Calculate moments. */
   m = moments_create (MOMENT_KURTOSIS);
   for (f = ft->valid; f < ft->missing; f++)
-    moments_pass_one (m, f->value.f, f->count);
+    moments_pass_one (m, f->values[0].f, f->count);
   for (f = ft->valid; f < ft->missing; f++)
-    moments_pass_two (m, f->value.f, f->count);
+    moments_pass_two (m, f->values[0].f, f->count);
   moments_calculate (m, NULL, &d[FRQ_ST_MEAN], &d[FRQ_ST_VARIANCE],
                      &d[FRQ_ST_SKEWNESS], &d[FRQ_ST_KURTOSIS]);
   moments_destroy (m);
 
   /* Formulae below are taken from _SPSS Statistical Algorithms_. */
-  d[FRQ_ST_MINIMUM] = ft->valid[0].value.f;
-  d[FRQ_ST_MAXIMUM] = ft->valid[ft->n_valid - 1].value.f;
+  d[FRQ_ST_MINIMUM] = ft->valid[0].values[0].f;
+  d[FRQ_ST_MAXIMUM] = ft->valid[ft->n_valid - 1].values[0].f;
   d[FRQ_ST_MODE] = X_mode;
   d[FRQ_ST_RANGE] = d[FRQ_ST_MAXIMUM] - d[FRQ_ST_MINIMUM];
   d[FRQ_ST_SUM] = d[FRQ_ST_MEAN] * W;
