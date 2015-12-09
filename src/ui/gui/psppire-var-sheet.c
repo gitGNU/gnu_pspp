@@ -1,5 +1,5 @@
 /* PSPPIRE - a graphical user interface for PSPP.
-   Copyright (C) 2008, 2009, 2011, 2012, 2013, 2014 Free Software Foundation, Inc.
+   Copyright (C) 2008, 2009, 2011, 2012, 2013, 2014, 2015 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -24,7 +24,6 @@
 #include "ui/gui/builder-wrapper.h"
 #include "ui/gui/helper.h"
 #include "ui/gui/missing-val-dialog.h"
-#include "ui/gui/pspp-sheet-selection.h"
 #include "ui/gui/psppire-cell-renderer-button.h"
 #include "ui/gui/psppire-data-editor.h"
 #include "ui/gui/psppire-data-window.h"
@@ -58,7 +57,7 @@ enum vs_column
     VS_ROLE
   };
 
-G_DEFINE_TYPE (PsppireVarSheet, psppire_var_sheet, PSPP_TYPE_SHEET_VIEW);
+G_DEFINE_TYPE (PsppireVarSheet, psppire_var_sheet, GTK_TYPE_TREE_VIEW);
 
 static void
 set_spin_cell (GtkCellRenderer *cell, int value, int min, int max, int step)
@@ -85,14 +84,14 @@ error_dialog (GtkWindow *w, gchar *primary_text, gchar *secondary_text)
 {
   GtkWidget *dialog =
     gtk_message_dialog_new (w,
-			    GTK_DIALOG_DESTROY_WITH_PARENT,
-			    GTK_MESSAGE_ERROR,
-			    GTK_BUTTONS_CLOSE, "%s", primary_text);
+                            GTK_DIALOG_DESTROY_WITH_PARENT,
+                            GTK_MESSAGE_ERROR,
+                            GTK_BUTTONS_CLOSE, "%s", primary_text);
 
   g_object_set (dialog, "icon-name", "psppicon", NULL);
 
   gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
-					    "%s", secondary_text);
+                                            "%s", secondary_text);
 
   gtk_dialog_run (GTK_DIALOG (dialog));
 
@@ -129,10 +128,10 @@ scroll_to_bottom (GtkWidget      *widget,
                   gpointer        unused UNUSED)
 {
   PsppireVarSheet *var_sheet = PSPPIRE_VAR_SHEET (widget);
-  PsppSheetView *sheet_view = PSPP_SHEET_VIEW (widget);
+  GtkTreeView *sheet_view = GTK_TREE_VIEW (widget);
   GtkAdjustment *vadjust;
 
-  vadjust = pspp_sheet_view_get_vadjustment (sheet_view);
+  vadjust = gtk_scrollable_get_vadjustment (GTK_SCROLLABLE (sheet_view));
   gtk_adjustment_set_value (vadjust, gtk_adjustment_get_upper (vadjust));
 
   if (var_sheet->scroll_to_bottom_signal)
@@ -142,6 +141,20 @@ scroll_to_bottom (GtkWidget      *widget,
       var_sheet->scroll_to_bottom_signal = 0;
     }
 }
+
+static struct variable *
+path_to_variable (PsppireVarSheet *var_sheet, GtkTreePath *path)
+{
+  PsppireDict *dict;
+  gint row;
+
+  row = gtk_tree_path_get_indices (path)[0];
+  dict = psppire_var_sheet_get_dictionary (var_sheet);
+  g_return_val_if_fail (dict != NULL, NULL);
+
+  return psppire_dict_get_variable (dict, row);
+}
+
 
 static struct variable *
 path_string_to_var (PsppireVarSheet *var_sheet, gchar *path_string)
@@ -300,25 +313,10 @@ on_var_column_edited (GtkCellRendererText *cell,
     }
 }
 
-static void
-render_popup_cell (PsppSheetViewColumn *tree_column,
-                   GtkCellRenderer *cell,
-                   GtkTreeModel *model,
-                   GtkTreeIter *iter,
-                   void *user_data)
-{
-  PsppireVarSheet *var_sheet = user_data;
-  gint row;
-
-  row = GPOINTER_TO_INT (iter->user_data);
-  g_object_set (cell,
-                "editable", row < psppire_dict_get_var_cnt (var_sheet->dict),
-                NULL);
-}
-
 const char *
 get_var_align_stock_id (enum alignment alignment)
 {
+
   switch (alignment)
     {
     case ALIGN_LEFT: return "align-left";
@@ -346,7 +344,7 @@ get_var_role_stock_id (enum var_role role)
 }
 
 static void
-render_var_cell (PsppSheetViewColumn *tree_column,
+render_var_cell (GtkTreeViewColumn *tree_column,
                  GtkCellRenderer *cell,
                  GtkTreeModel *model,
                  GtkTreeIter *iter,
@@ -360,6 +358,7 @@ render_var_cell (PsppSheetViewColumn *tree_column,
 
   column_id = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (tree_column),
                                                   "column-number")) - 1;
+
   row = GPOINTER_TO_INT (iter->user_data);
 
   gtk_cell_renderer_set_visible (cell, true);
@@ -377,9 +376,9 @@ render_var_cell (PsppSheetViewColumn *tree_column,
             g_object_set (cell, "adjustment", NULL, NULL);
         }
       else
-	{
-	  gtk_cell_renderer_set_visible (cell, false);
-	}
+        {
+          gtk_cell_renderer_set_visible (cell, false);
+        }
       return;
     }
 
@@ -494,7 +493,6 @@ render_var_cell (PsppSheetViewColumn *tree_column,
                         NULL);
         }
       break;
-
     case VS_ROLE:
       if (GTK_IS_CELL_RENDERER_TEXT (cell))
         g_object_set (cell,
@@ -526,15 +524,14 @@ path_string_to_variable (PsppireVarSheet *var_sheet, gchar *path_string)
 }
 
 static void
-on_type_click (PsppireCellRendererButton *cell,
-               gchar *path,
-               PsppireVarSheet *var_sheet)
+on_type_activated (PsppireVarSheet *var_sheet,
+                   GtkTreePath *path)
 {
   GtkWidget *toplevel = gtk_widget_get_toplevel (GTK_WIDGET (var_sheet));
   struct fmt_spec format;
   struct variable *var;
 
-  var = path_string_to_variable (var_sheet, path);
+  var = path_to_variable (var_sheet, path);
   g_return_if_fail (var != NULL);
 
   format = *var_get_print_format (var);
@@ -544,15 +541,14 @@ on_type_click (PsppireCellRendererButton *cell,
 }
 
 static void
-on_value_labels_click (PsppireCellRendererButton *cell,
-                       gchar *path,
-                       PsppireVarSheet *var_sheet)
+on_value_labels_activated (PsppireVarSheet *var_sheet,
+                           GtkTreePath *path)
 {
   GtkWidget *toplevel = gtk_widget_get_toplevel (GTK_WIDGET (var_sheet));
   struct val_labs *labels;
   struct variable *var;
 
-  var = path_string_to_variable (var_sheet, path);
+  var = path_to_variable (var_sheet, path);
   g_return_if_fail (var != NULL);
 
   labels = psppire_val_labs_dialog_run (GTK_WINDOW (toplevel), var);
@@ -564,15 +560,14 @@ on_value_labels_click (PsppireCellRendererButton *cell,
 }
 
 static void
-on_missing_values_click (PsppireCellRendererButton *cell,
-                         gchar *path,
-                         PsppireVarSheet *var_sheet)
+on_missing_values_activated (PsppireVarSheet *var_sheet,
+                             GtkTreePath *path)
 {
   GtkWidget *toplevel = gtk_widget_get_toplevel (GTK_WIDGET (var_sheet));
   struct missing_values mv;
   struct variable *var;
 
-  var = path_string_to_variable (var_sheet, path);
+  var = path_to_variable (var_sheet, path);
   g_return_if_fail (var != NULL);
 
   psppire_missing_val_dialog_run (GTK_WINDOW (toplevel), var, &mv);
@@ -580,62 +575,23 @@ on_missing_values_click (PsppireCellRendererButton *cell,
   mv_destroy (&mv);
 }
 
-static gint
-get_string_width (PsppSheetView *treeview, GtkCellRenderer *renderer,
-                  const char *string)
-{
-  gint width;
-  g_object_set (G_OBJECT (renderer),
-                PSPPIRE_IS_CELL_RENDERER_BUTTON (renderer) ? "label" : "text",
-                string, (void *) NULL);
-
-  gtk_cell_renderer_get_preferred_width (renderer, GTK_WIDGET (treeview), NULL, &width);
-
-  return width;
-}
-
-static gint
-get_monospace_width (PsppSheetView *treeview, GtkCellRenderer *renderer,
-                     size_t char_cnt)
-{
-  struct string s;
-  gint width;
-
-  ds_init_empty (&s);
-  ds_put_byte_multiple (&s, '0', char_cnt);
-  ds_put_byte (&s, ' ');
-  width = get_string_width (treeview, renderer, ds_cstr (&s));
-  ds_destroy (&s);
-
-  return width;
-}
-
-static PsppSheetViewColumn *
+static GtkTreeViewColumn *
 add_var_sheet_column (PsppireVarSheet *var_sheet, GtkCellRenderer *renderer,
                       enum vs_column column_id,
                       const char *title, int width)
 {
-  PsppSheetView *sheet_view = PSPP_SHEET_VIEW (var_sheet);
-  int title_width, content_width;
-  PsppSheetViewColumn *column;
+  GtkTreeView *sheet_view = GTK_TREE_VIEW (var_sheet);
+  GtkTreeViewColumn *column;
 
-  column = pspp_sheet_view_column_new_with_attributes (title, renderer, NULL);
+  column = gtk_tree_view_column_new_with_attributes (title, renderer, NULL);
   g_object_set_data (G_OBJECT (column), "column-number",
                      GINT_TO_POINTER (column_id) + 1);
 
-  pspp_sheet_view_column_set_cell_data_func (
+  gtk_tree_view_column_set_cell_data_func (
     column, renderer, render_var_cell, var_sheet, NULL);
-
-  title_width = get_string_width (sheet_view, renderer, title);
-  content_width = get_monospace_width (sheet_view, renderer, width);
-  g_object_set_data (G_OBJECT (column), "content-width",
-                     GINT_TO_POINTER (content_width));
-
-  pspp_sheet_view_column_set_fixed_width (column,
-                                          MAX (title_width, content_width));
-  pspp_sheet_view_column_set_resizable (column, TRUE);
-
-  pspp_sheet_view_append_column (sheet_view, column);
+  gtk_tree_view_column_set_sizing (column, GTK_TREE_VIEW_COLUMN_FIXED);
+  gtk_tree_view_column_set_resizable (column, TRUE);
+  gtk_tree_view_append_column (sheet_view, column);
 
   g_signal_connect (renderer, "edited",
                     G_CALLBACK (on_var_column_edited),
@@ -647,7 +603,7 @@ add_var_sheet_column (PsppireVarSheet *var_sheet, GtkCellRenderer *renderer,
   return column;
 }
 
-static PsppSheetViewColumn *
+static GtkTreeViewColumn *
 add_text_column (PsppireVarSheet *var_sheet, enum vs_column column_id,
                  const char *title, int width)
 {
@@ -655,7 +611,7 @@ add_text_column (PsppireVarSheet *var_sheet, enum vs_column column_id,
                                column_id, title, width);
 }
 
-static PsppSheetViewColumn *
+static GtkTreeViewColumn *
 add_spin_column (PsppireVarSheet *var_sheet, enum vs_column column_id,
                  const char *title, int width)
 {
@@ -734,7 +690,7 @@ add_combo_column (PsppireVarSheet *var_sheet, enum vs_column column_id,
                   const char *(*value_to_stock_id) (enum fmt_type, int value),
                   ...)
 {
-  PsppSheetViewColumn *column;
+  GtkTreeViewColumn *column;
   GtkCellRenderer *cell;
   GtkListStore *store;
   const char *name;
@@ -756,8 +712,10 @@ add_combo_column (PsppireVarSheet *var_sheet, enum vs_column column_id,
   g_object_set (cell,
                 "has-entry", FALSE,
                 "model", GTK_TREE_MODEL (store),
+                "editable", TRUE,
                 "text-column", 1,
                 NULL);
+
   if (value_to_stock_id != NULL)
     {
       g_object_set_data (G_OBJECT (cell),
@@ -771,51 +729,21 @@ add_combo_column (PsppireVarSheet *var_sheet, enum vs_column column_id,
 
   cell = gtk_cell_renderer_pixbuf_new ();
   g_object_set (cell, "width", 16, "height", 16, NULL);
-  pspp_sheet_view_column_pack_end (column, cell, FALSE);
-  pspp_sheet_view_column_set_cell_data_func (
+  gtk_tree_view_column_pack_end (column, cell, FALSE);
+  gtk_tree_view_column_set_cell_data_func (
     column, cell, render_var_cell, var_sheet, NULL);
-}
 
-static void
-add_popup_menu (PsppireVarSheet *var_sheet,
-                PsppSheetViewColumn *column,
-                void (*on_click) (PsppireCellRendererButton *,
-                                  gchar *path,
-                                  PsppireVarSheet *var_sheet))
-{
-  PsppSheetView *sheet_view = PSPP_SHEET_VIEW (var_sheet);
-  const char *button_label = "...";
-  GtkCellRenderer *button_renderer;
-  gint content_width;
-
-  button_renderer = psppire_cell_renderer_button_new ();
-  g_object_set (button_renderer,
-                "label", button_label,
-                "editable", TRUE,
-                NULL);
-  g_signal_connect (button_renderer, "clicked", G_CALLBACK (on_click),
-                    var_sheet);
-  pspp_sheet_view_column_pack_start (column, button_renderer, FALSE);
-  pspp_sheet_view_column_set_cell_data_func (
-    column, button_renderer, render_popup_cell, var_sheet, NULL);
-
-  content_width = GPOINTER_TO_INT (g_object_get_data (
-                                     G_OBJECT (column), "content-width"));
-  content_width += get_string_width (sheet_view, button_renderer,
-                                     button_label);
-  if (content_width > pspp_sheet_view_column_get_fixed_width (column))
-    pspp_sheet_view_column_set_fixed_width (column, content_width);
 }
 
 static gboolean
 get_tooltip_location (GtkWidget *widget, GtkTooltip *tooltip,
                       gint wx, gint wy, size_t *row, size_t *column)
 {
-  PsppSheetView *tree_view = PSPP_SHEET_VIEW (widget);
+  GtkTreeView *tree_view = GTK_TREE_VIEW (widget);
   gint bx, by;
   GtkTreePath *path;
   GtkTreeIter iter;
-  PsppSheetViewColumn *tree_column;
+  GtkTreeViewColumn *tree_column;
   GtkTreeModel *tree_model;
   gpointer column_ptr;
   bool ok;
@@ -833,9 +761,9 @@ get_tooltip_location (GtkWidget *widget, GtkTooltip *tooltip,
   if (!gtk_widget_get_mapped (widget))
     return FALSE;
 
-  pspp_sheet_view_convert_widget_to_bin_window_coords (tree_view,
+  gtk_tree_view_convert_widget_to_bin_window_coords (tree_view,
                                                      wx, wy, &bx, &by);
-  if (!pspp_sheet_view_get_path_at_pos (tree_view, bx, by,
+  if (!gtk_tree_view_get_path_at_pos (tree_view, bx, by,
                                       &path, &tree_column, NULL, NULL))
     return FALSE;
 
@@ -844,10 +772,10 @@ get_tooltip_location (GtkWidget *widget, GtkTooltip *tooltip,
     return FALSE;
   *column = GPOINTER_TO_INT (column_ptr) - 1;
 
-  pspp_sheet_view_set_tooltip_cell (tree_view, tooltip, path, tree_column,
+  gtk_tree_view_set_tooltip_cell (tree_view, tooltip, path, tree_column,
                                     NULL);
 
-  tree_model = pspp_sheet_view_get_model (tree_view);
+  tree_model = gtk_tree_view_get_model (tree_view);
   ok = gtk_tree_model_get_iter (tree_model, &iter, path);
   gtk_tree_path_free (path);
   if (!ok)
@@ -953,22 +881,22 @@ static gboolean
 on_button_pressed (GtkWidget *widget, GdkEventButton *event,
                    gpointer user_data UNUSED)
 {
-  PsppSheetView *sheet_view = PSPP_SHEET_VIEW (widget);
+  GtkTreeView *sheet_view = GTK_TREE_VIEW (widget);
 
   if (event->type == GDK_BUTTON_PRESS && event->button == 3)
     {
-      PsppSheetSelection *selection;
+      GtkTreeSelection *selection;
 
-      selection = pspp_sheet_view_get_selection (sheet_view);
-      if (pspp_sheet_selection_count_selected_rows (selection) <= 1)
+      selection = gtk_tree_view_get_selection (sheet_view);
+      if (gtk_tree_selection_count_selected_rows (selection) <= 1)
         {
           GtkTreePath *path;
 
-          if (pspp_sheet_view_get_path_at_pos (sheet_view, event->x, event->y,
+          if (gtk_tree_view_get_path_at_pos (sheet_view, event->x, event->y,
                                                &path, NULL, NULL, NULL))
             {
-              pspp_sheet_selection_unselect_all (selection);
-              pspp_sheet_selection_select_path (selection, path);
+              gtk_tree_selection_unselect_all (selection);
+              gtk_tree_selection_select_path (selection, path);
               gtk_tree_path_free (path);
             }
         }
@@ -979,7 +907,7 @@ on_button_pressed (GtkWidget *widget, GdkEventButton *event,
 
   return FALSE;
 }
-
+
 GType
 psppire_fmt_use_get_type (void)
 {
@@ -987,14 +915,14 @@ psppire_fmt_use_get_type (void)
   if (etype == 0)
     {
       static const GEnumValue values[] =
-	{
-	  { FMT_FOR_INPUT, "FMT_FOR_INPUT", "input" },
-	  { FMT_FOR_OUTPUT, "FMT_FOR_OUTPUT", "output" },
-	  { 0, NULL, NULL }
-	};
+        {
+          { FMT_FOR_INPUT, "FMT_FOR_INPUT", "input" },
+          { FMT_FOR_OUTPUT, "FMT_FOR_OUTPUT", "output" },
+          { 0, NULL, NULL }
+        };
 
       etype = g_enum_register_static
-	(g_intern_static_string ("PsppireFmtUse"), values);
+        (g_intern_static_string ("PsppireFmtUse"), values);
     }
   return etype;
 }
@@ -1097,11 +1025,11 @@ psppire_var_sheet_dispose (GObject *obj)
   for (i = 0; i < PSPPIRE_VAR_SHEET_N_SIGNALS; i++)
     if ( var_sheet->dict_signals[i])
       g_signal_handler_disconnect (var_sheet->dict,
-				   var_sheet->dict_signals[i]);
+                                   var_sheet->dict_signals[i]);
 
   if (var_sheet->dict)
     g_object_unref (var_sheet->dict);
-  
+
   if (var_sheet->uim)
     g_object_unref (var_sheet->uim);
 
@@ -1116,7 +1044,6 @@ psppire_var_sheet_dispose (GObject *obj)
 
   g_object_unref (var_sheet->builder);
 
-  
   G_OBJECT_CLASS (psppire_var_sheet_parent_class)->dispose (obj);
 }
 
@@ -1178,7 +1105,7 @@ psppire_var_sheet_class_init (PsppireVarSheetClass *class)
 }
 
 static void
-render_row_number_cell (PsppSheetViewColumn *tree_column,
+render_row_number_cell (GtkTreeViewColumn *tree_column,
                         GtkCellRenderer *cell,
                         GtkTreeModel *model,
                         GtkTreeIter *iter,
@@ -1192,69 +1119,43 @@ render_row_number_cell (PsppSheetViewColumn *tree_column,
 
   g_value_init (&gvalue, G_TYPE_INT);
   g_value_set_int (&gvalue, row + 1);
-  g_object_set_property (G_OBJECT (cell), "label", &gvalue);
+  g_object_set_property (G_OBJECT (cell), "text", &gvalue);
   g_value_unset (&gvalue);
 
   if (!var_sheet->dict || row < psppire_dict_get_var_cnt (var_sheet->dict))
-    g_object_set (cell, "editable", TRUE, NULL);
+    g_object_set (cell, "editable", FALSE, NULL);
   else
     g_object_set (cell, "editable", FALSE, NULL);
 }
 
 static void
-psppire_var_sheet_row_number_double_clicked (PsppireCellRendererButton *button,
-                                             gchar *path_string,
-                                             PsppireVarSheet *var_sheet)
-{
-  GtkTreePath *path;
-
-  g_return_if_fail (var_sheet->dict != NULL);
-
-  path = gtk_tree_path_new_from_string (path_string);
-  if (gtk_tree_path_get_depth (path) == 1)
-    {
-      gint *indices = gtk_tree_path_get_indices (path);
-      if (indices[0] < psppire_dict_get_var_cnt (var_sheet->dict))
-        {
-          gboolean handled;
-          g_signal_emit_by_name (var_sheet, "var-double-clicked",
-                                 indices[0], &handled);
-        }
-    }
-  gtk_tree_path_free (path);
-}
-
-static void
-psppire_var_sheet_variables_column_clicked (PsppSheetViewColumn *column,
+psppire_var_sheet_variables_column_clicked (GtkTreeViewColumn *column,
                                             PsppireVarSheet *var_sheet)
 {
-  PsppSheetView *sheet_view = PSPP_SHEET_VIEW (var_sheet);
-  PsppSheetSelection *selection = pspp_sheet_view_get_selection (sheet_view);
+  GtkTreeView *sheet_view = GTK_TREE_VIEW (var_sheet);
+  GtkTreeSelection *selection = gtk_tree_view_get_selection (sheet_view);
 
-  pspp_sheet_selection_select_all (selection);
+  gtk_tree_selection_select_all (selection);
 }
 
-static PsppSheetViewColumn *
+static GtkTreeViewColumn *
 make_row_number_column (PsppireVarSheet *var_sheet)
 {
-  PsppSheetViewColumn *column;
+  GtkTreeViewColumn *column;
   GtkCellRenderer *renderer;
 
-  renderer = psppire_cell_renderer_button_new ();
-  g_object_set (renderer, "xalign", 1.0, NULL);
-  g_signal_connect (renderer, "double-clicked",
-                    G_CALLBACK (psppire_var_sheet_row_number_double_clicked),
-                    var_sheet);
+  renderer = gtk_cell_renderer_text_new ();
+  g_object_set (renderer, "xalign", 0.5, NULL);
 
-  column = pspp_sheet_view_column_new_with_attributes (_("Variable"),
+  column = gtk_tree_view_column_new_with_attributes (_("Variable"),
                                                        renderer, NULL);
-  pspp_sheet_view_column_set_clickable (column, TRUE);
-  pspp_sheet_view_column_set_cell_data_func (
-    column, renderer, render_row_number_cell, var_sheet, NULL);
-  pspp_sheet_view_column_set_fixed_width (column, 50);
+  gtk_tree_view_column_set_resizable (column, FALSE);
+  gtk_tree_view_column_set_clickable (column, TRUE);
   g_signal_connect (column, "clicked",
                     G_CALLBACK (psppire_var_sheet_variables_column_clicked),
                     var_sheet);
+  gtk_tree_view_column_set_cell_data_func (
+    column, renderer, render_row_number_cell, var_sheet, NULL);
 
   return column;
 }
@@ -1262,40 +1163,34 @@ make_row_number_column (PsppireVarSheet *var_sheet)
 static void
 on_edit_clear_variables (GtkAction *action, PsppireVarSheet *var_sheet)
 {
-  PsppSheetView *sheet_view = PSPP_SHEET_VIEW (var_sheet);
-  PsppSheetSelection *selection = pspp_sheet_view_get_selection (sheet_view);
+  GtkTreeView *sheet_view = GTK_TREE_VIEW (var_sheet);
+  GtkTreeSelection *selection = gtk_tree_view_get_selection (sheet_view);
   PsppireDict *dict = var_sheet->dict;
-  const struct range_set_node *node;
-  struct range_set *selected;
+  GList *list;
 
-  selected = pspp_sheet_selection_get_range_set (selection);
-  for (node = range_set_last (selected); node != NULL;
-       node = range_set_prev (selected, node))
-    {
-      int i;
+  list = gtk_tree_selection_get_selected_rows (selection, NULL);
 
-      for (i = 1; i <= range_set_node_get_width (node); i++)
-        {
-          unsigned long row = range_set_node_get_end (node) - i;
-          if (row < psppire_dict_get_var_cnt (dict))
-            psppire_dict_delete_variables (dict, row, 1);
-        }
-    }
-  range_set_destroy (selected);
+  for (list = g_list_last(list); list != NULL; list = g_list_previous(list)){
+    gint row;
+    row = gtk_tree_path_get_indices ((GtkTreePath *)(list->data))[0];
+    if (row < psppire_dict_get_var_cnt (dict))
+      psppire_dict_delete_variables (dict, row, 1);
+  }
+  g_list_free_full (list, (GDestroyNotify) gtk_tree_path_free);
 }
 
 static void
-on_selection_changed (PsppSheetSelection *selection,
+on_selection_changed (GtkTreeSelection *selection,
                       gpointer user_data UNUSED)
 {
-  PsppSheetView *sheet_view = pspp_sheet_selection_get_tree_view (selection);
+  GtkTreeView *sheet_view = gtk_tree_selection_get_tree_view (selection);
   PsppireVarSheet *var_sheet = PSPPIRE_VAR_SHEET (sheet_view);
   gint n_selected_rows;
   gboolean may_delete;
   GtkTreePath *path;
   GtkAction *action;
 
-  n_selected_rows = pspp_sheet_selection_count_selected_rows (selection);
+  n_selected_rows = gtk_tree_selection_count_selected_rows (selection);
 
   action = get_action_assert (var_sheet->builder, "edit_insert-variable");
   gtk_action_set_sensitive (action, (var_sheet->may_create_vars
@@ -1311,7 +1206,7 @@ on_selection_changed (PsppSheetSelection *selection,
       /* The row used for inserting new variables cannot be deleted. */
       path = gtk_tree_path_new_from_indices (
         psppire_dict_get_var_cnt (var_sheet->dict), -1);
-      may_delete = !pspp_sheet_selection_path_is_selected (selection, path);
+      may_delete = !gtk_tree_selection_path_is_selected (selection, path);
       gtk_tree_path_free (path);
       break;
 
@@ -1326,15 +1221,15 @@ on_selection_changed (PsppSheetSelection *selection,
 static void
 on_edit_insert_variable (GtkAction *action, PsppireVarSheet *var_sheet)
 {
-  PsppSheetView *sheet_view = PSPP_SHEET_VIEW (var_sheet);
-  PsppSheetSelection *selection = pspp_sheet_view_get_selection (sheet_view);
+  GtkTreeView *sheet_view = GTK_TREE_VIEW (var_sheet);
+  GtkTreeSelection *selection = gtk_tree_view_get_selection (sheet_view);
   PsppireDict *dict = var_sheet->dict;
-  struct range_set *selected;
-  unsigned long row;
+  GList *list;
+  gint row;
 
-  selected = pspp_sheet_selection_get_range_set (selection);
-  row = range_set_scan (selected, 0);
-  range_set_destroy (selected);
+  list = gtk_tree_selection_get_selected_rows (selection, NULL);
+  row = gtk_tree_path_get_indices ((GtkTreePath *)(g_list_first(list)->data))[0];
+  g_list_free_full (list, (GDestroyNotify) gtk_tree_path_free);
 
   if (row <= psppire_dict_get_var_cnt (dict))
     {
@@ -1345,10 +1240,47 @@ on_edit_insert_variable (GtkAction *action, PsppireVarSheet *var_sheet)
 }
 
 static void
+on_row_activated (GtkTreeView *treeview,
+                  GtkTreePath *path,
+                  GtkTreeViewColumn *column,
+                  PsppireVarSheet *var_sheet)
+{
+  gint column_id;
+
+  column_id = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (column),
+                                                  "column-number")) - 1;
+  switch (column_id)
+    {
+    case -1: /* This is the Variables column */
+      {
+        gint *indices = gtk_tree_path_get_indices (path);
+        if (indices[0] < psppire_dict_get_var_cnt (var_sheet->dict))
+          {
+            gboolean handled;
+            g_signal_emit_by_name (var_sheet, "var-double-clicked",
+                                   indices[0], &handled);
+          }
+      }
+      break;
+    case VS_TYPE:
+      on_type_activated (var_sheet, path);
+      break;
+    case VS_VALUES:
+      on_value_labels_activated (var_sheet, path);
+      break;
+    case VS_MISSING:
+      on_missing_values_activated (var_sheet, path);
+      break;
+      //default:
+      //gtk_tree_view_set_cursor (treeview, path, column, TRUE);
+    }
+}
+
+static void
 psppire_var_sheet_init (PsppireVarSheet *obj)
 {
-  PsppSheetView *sheet_view = PSPP_SHEET_VIEW (obj);
-  PsppSheetViewColumn *column;
+  GtkTreeView *sheet_view = GTK_TREE_VIEW (obj);
+  GtkTreeViewColumn *column;
   GtkAction *action;
   GList *list;
 
@@ -1363,7 +1295,7 @@ psppire_var_sheet_init (PsppireVarSheet *obj)
   obj->dispose_has_run = FALSE;
   obj->uim = NULL;
 
-  pspp_sheet_view_append_column (sheet_view, make_row_number_column (obj));
+  gtk_tree_view_append_column (sheet_view, make_row_number_column (obj));
 
   column = add_text_column (obj, VS_NAME, _("Name"), 12);
   list = gtk_cell_layout_get_cells (GTK_CELL_LAYOUT (column));
@@ -1371,8 +1303,7 @@ psppire_var_sheet_init (PsppireVarSheet *obj)
                     G_CALLBACK (on_name_column_editing_started), NULL);
   g_list_free (list);
 
-  column = add_text_column (obj, VS_TYPE, _("Type"), 8);
-  add_popup_menu (obj, column, on_type_click);
+  add_text_column (obj, VS_TYPE, _("Type"), 8);
 
   add_spin_column (obj, VS_WIDTH, _("Width"), 5);
 
@@ -1380,11 +1311,9 @@ psppire_var_sheet_init (PsppireVarSheet *obj)
 
   add_text_column (obj, VS_LABEL, _("Label"), 20);
 
-  column = add_text_column (obj, VS_VALUES, _("Value Labels"), 20);
-  add_popup_menu (obj, column, on_value_labels_click);
+  add_text_column (obj, VS_VALUES, _("Value Labels"), 20);
 
-  column = add_text_column (obj, VS_MISSING, _("Missing Values"), 20);
-  add_popup_menu (obj, column, on_missing_values_click);
+  add_text_column (obj, VS_MISSING, _("Missing Values"), 20);
 
   add_spin_column (obj, VS_COLUMNS, _("Columns"), 3);
 
@@ -1409,10 +1338,12 @@ psppire_var_sheet_init (PsppireVarSheet *obj)
                     var_role_to_string (ROLE_SPLIT), ROLE_SPLIT,
                     NULL);
 
-  pspp_sheet_view_set_rubber_banding (sheet_view, TRUE);
-  pspp_sheet_selection_set_mode (pspp_sheet_view_get_selection (sheet_view),
-                                 PSPP_SHEET_SELECTION_MULTIPLE);
+  gtk_tree_view_set_rubber_banding (sheet_view, TRUE);
+  //  gtk_tree_selection_set_mode (gtk_tree_view_get_selection (sheet_view),
+  //                                GTK_TREE_SELECTION_MULTIPLE);
 
+  g_signal_connect (sheet_view, "row-activated",
+                    G_CALLBACK (on_row_activated), sheet_view);
   g_object_set (G_OBJECT (obj), "has-tooltip", TRUE, NULL);
   g_signal_connect (obj, "query-tooltip",
                     G_CALLBACK (on_query_var_tooltip), NULL);
@@ -1426,7 +1357,7 @@ psppire_var_sheet_init (PsppireVarSheet *obj)
   g_signal_connect (action, "activate", G_CALLBACK (on_edit_clear_variables),
                     obj);
   gtk_action_set_sensitive (action, FALSE);
-  g_signal_connect (pspp_sheet_view_get_selection (sheet_view),
+  g_signal_connect (gtk_tree_view_get_selection (sheet_view),
                     "changed", G_CALLBACK (on_selection_changed), NULL);
 
   action = get_action_assert (obj->builder, "edit_insert-variable");
@@ -1450,7 +1381,7 @@ psppire_var_sheet_get_dictionary (PsppireVarSheet *var_sheet)
 static void
 refresh_model (PsppireVarSheet *var_sheet)
 {
-  pspp_sheet_view_set_model (PSPP_SHEET_VIEW (var_sheet), NULL);
+  gtk_tree_view_set_model (GTK_TREE_VIEW (var_sheet), NULL);
 
   if (var_sheet->dict != NULL)
     {
@@ -1460,7 +1391,7 @@ refresh_model (PsppireVarSheet *var_sheet)
       n_rows = (psppire_dict_get_var_cnt (var_sheet->dict)
                 + var_sheet->may_create_vars);
       store = psppire_empty_list_store_new (n_rows);
-      pspp_sheet_view_set_model (PSPP_SHEET_VIEW (var_sheet),
+      gtk_tree_view_set_model (GTK_TREE_VIEW (var_sheet),
                                  GTK_TREE_MODEL (store));
       g_object_unref (store);
     }
@@ -1468,15 +1399,15 @@ refresh_model (PsppireVarSheet *var_sheet)
 
 static void
 on_var_changed (PsppireDict *dict, glong row,
-		guint what, const struct variable *oldvar,
-		PsppireVarSheet *var_sheet)
+                guint what, const struct variable *oldvar,
+                PsppireVarSheet *var_sheet)
 {
   PsppireEmptyListStore *store;
 
   g_return_if_fail (dict == var_sheet->dict);
 
-  store = PSPPIRE_EMPTY_LIST_STORE (pspp_sheet_view_get_model (
-                                      PSPP_SHEET_VIEW (var_sheet)));
+  store = PSPPIRE_EMPTY_LIST_STORE (gtk_tree_view_get_model (
+                                      GTK_TREE_VIEW (var_sheet)));
   g_return_if_fail (store != NULL);
 
   psppire_empty_list_store_row_changed (store, row);
@@ -1490,8 +1421,8 @@ on_var_inserted (PsppireDict *dict, glong row, PsppireVarSheet *var_sheet)
 
   g_return_if_fail (dict == var_sheet->dict);
 
-  store = PSPPIRE_EMPTY_LIST_STORE (pspp_sheet_view_get_model (
-                                      PSPP_SHEET_VIEW (var_sheet)));
+  store = PSPPIRE_EMPTY_LIST_STORE (gtk_tree_view_get_model (
+                                      GTK_TREE_VIEW (var_sheet)));
   g_return_if_fail (store != NULL);
 
   n_rows = (psppire_dict_get_var_cnt (var_sheet->dict)
@@ -1510,8 +1441,8 @@ on_var_deleted (PsppireDict *dict,
 
   g_return_if_fail (dict == var_sheet->dict);
 
-  store = PSPPIRE_EMPTY_LIST_STORE (pspp_sheet_view_get_model (
-                                      PSPP_SHEET_VIEW (var_sheet)));
+  store = PSPPIRE_EMPTY_LIST_STORE (gtk_tree_view_get_model (
+                                      GTK_TREE_VIEW (var_sheet)));
   g_return_if_fail (store != NULL);
 
   n_rows = (psppire_dict_get_var_cnt (var_sheet->dict)
@@ -1534,15 +1465,15 @@ psppire_var_sheet_set_dictionary (PsppireVarSheet *var_sheet,
   if (var_sheet->dict != NULL)
     {
       int i;
-      
+
       for (i = 0; i < PSPPIRE_VAR_SHEET_N_SIGNALS; i++)
-	{
-	  if (var_sheet->dict_signals[i])
-	    g_signal_handler_disconnect (var_sheet->dict,
-					 var_sheet->dict_signals[i]);
-	  
-	  var_sheet->dict_signals[i] = 0;
-	}
+        {
+          if (var_sheet->dict_signals[i])
+            g_signal_handler_disconnect (var_sheet->dict,
+                                         var_sheet->dict_signals[i]);
+
+          var_sheet->dict_signals[i] = 0;
+        }
 
       g_object_unref (var_sheet->dict);
     }
@@ -1590,8 +1521,8 @@ psppire_var_sheet_set_may_create_vars (PsppireVarSheet *var_sheet,
 
       var_sheet->may_create_vars = may_create_vars;
 
-      store = PSPPIRE_EMPTY_LIST_STORE (pspp_sheet_view_get_model (
-                                          PSPP_SHEET_VIEW (var_sheet)));
+      store = PSPPIRE_EMPTY_LIST_STORE (gtk_tree_view_get_model (
+                                          GTK_TREE_VIEW (var_sheet)));
       g_return_if_fail (store != NULL);
 
       n_rows = (psppire_dict_get_var_cnt (var_sheet->dict)
@@ -1603,8 +1534,8 @@ psppire_var_sheet_set_may_create_vars (PsppireVarSheet *var_sheet,
       else
         psppire_empty_list_store_row_deleted (store, n_rows);
 
-      on_selection_changed (pspp_sheet_view_get_selection (
-                              PSPP_SHEET_VIEW (var_sheet)), NULL);
+      on_selection_changed (gtk_tree_view_get_selection (
+                              GTK_TREE_VIEW (var_sheet)), NULL);
     }
 }
 
@@ -1621,20 +1552,20 @@ psppire_var_sheet_set_may_delete_vars (PsppireVarSheet *var_sheet,
   if (var_sheet->may_delete_vars != may_delete_vars)
     {
       var_sheet->may_delete_vars = may_delete_vars;
-      on_selection_changed (pspp_sheet_view_get_selection (
-                              PSPP_SHEET_VIEW (var_sheet)), NULL);
+      on_selection_changed (gtk_tree_view_get_selection (
+                              GTK_TREE_VIEW (var_sheet)), NULL);
     }
 }
 
 void
 psppire_var_sheet_goto_variable (PsppireVarSheet *var_sheet, int dict_index)
 {
-  PsppSheetView *sheet_view = PSPP_SHEET_VIEW (var_sheet);
+  GtkTreeView *sheet_view = GTK_TREE_VIEW (var_sheet);
   GtkTreePath *path;
 
   path = gtk_tree_path_new_from_indices (dict_index, -1);
-  pspp_sheet_view_scroll_to_cell (sheet_view, path, NULL, FALSE, 0.0, 0.0);
-  pspp_sheet_view_set_cursor (sheet_view, path, NULL, FALSE);
+  gtk_tree_view_scroll_to_cell (sheet_view, path, NULL, FALSE, 0.0, 0.0);
+  gtk_tree_view_set_cursor (sheet_view, path, NULL, TRUE);
   gtk_tree_path_free (path);
 }
 
@@ -1644,8 +1575,8 @@ psppire_var_sheet_get_ui_manager (PsppireVarSheet *var_sheet)
   if (var_sheet->uim == NULL)
     {
       var_sheet->uim = GTK_UI_MANAGER (get_object_assert (var_sheet->builder,
-							  "var_sheet_uim",
-							  GTK_TYPE_UI_MANAGER));
+                                                          "var_sheet_uim",
+                                                          GTK_TYPE_UI_MANAGER));
       g_object_ref (var_sheet->uim);
     }
 

@@ -735,11 +735,17 @@ psppire_data_editor_init (PsppireDataEditor *de)
   gtk_widget_show_all (de->vbox);
 
   de->var_sheet = GTK_WIDGET (psppire_var_sheet_new ());
-  pspp_sheet_view_set_grid_lines (PSPP_SHEET_VIEW (de->var_sheet),
+  gtk_tree_view_set_grid_lines (GTK_TREE_VIEW (de->var_sheet),
                                   GTK_TREE_VIEW_GRID_LINES_BOTH);
+  gtk_tree_view_set_activate_on_single_click (GTK_TREE_VIEW (de->var_sheet), FALSE);
+  gtk_tree_selection_set_mode (gtk_tree_view_get_selection (GTK_TREE_VIEW (de->var_sheet)),
+                               GTK_SELECTION_MULTIPLE);
   var_sheet_scroller = gtk_scrolled_window_new (NULL, NULL);
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (var_sheet_scroller),
                                   GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+  gtk_scrolled_window_set_kinetic_scrolling (GTK_SCROLLED_WINDOW (var_sheet_scroller),
+                                             FALSE);
+
   gtk_container_add (GTK_CONTAINER (var_sheet_scroller), de->var_sheet);
   gtk_widget_show_all (var_sheet_scroller);
   gtk_notebook_append_page (GTK_NOTEBOOK (de), var_sheet_scroller,
@@ -787,7 +793,7 @@ psppire_data_editor_show_grid (PsppireDataEditor *de, gboolean grid_visible)
 
   FOR_EACH_DATA_SHEET (data_sheet, i, de)
     pspp_sheet_view_set_grid_lines (PSPP_SHEET_VIEW (data_sheet), grid);
-  pspp_sheet_view_set_grid_lines (PSPP_SHEET_VIEW (de->var_sheet), grid);
+  gtk_tree_view_set_grid_lines (GTK_TREE_VIEW (de->var_sheet), grid);
 }
 
 

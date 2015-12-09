@@ -25,8 +25,6 @@
 
 #include <gtk/gtk.h>
 #include "data/format.h"
-#include "ui/gui/pspp-sheet-view.h"
-
 
 G_BEGIN_DECLS
 
@@ -55,7 +53,7 @@ enum
 
 struct _PsppireVarSheet
 {
-  PsppSheetView parent;
+  GtkTreeView parent;
 
   gboolean may_create_vars;
   gboolean may_delete_vars;
@@ -78,7 +76,7 @@ struct _PsppireVarSheet
 
 struct _PsppireVarSheetClass
 {
-  PsppSheetViewClass parent_class;
+  GtkTreeViewClass parent_class;
 };
 
 GType          psppire_var_sheet_get_type        (void);
