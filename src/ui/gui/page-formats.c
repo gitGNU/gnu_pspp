@@ -45,6 +45,7 @@
 #include "ui/gui/psppire-empty-list-store.h"
 #include "ui/gui/psppire-var-sheet.h"
 #include "ui/gui/psppire-scanf.h"
+#include "ui/gui/pspp-sheet-view.h"
 
 #include "gl/intprops.h"
 #include "gl/xalloc.h"

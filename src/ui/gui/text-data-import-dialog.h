@@ -19,6 +19,7 @@
 
 #include <glib-object.h>
 #include "ui/gui/psppire-data-window.h"
+#include "ui/gui/pspp-sheet-view.h"
 #include "data/spreadsheet-reader.h"
 
 #include "libpspp/str.h"

@@ -37,6 +37,7 @@
 #define __PSPP_SHEET_SELECTION_H__
 
 #include <gtk/gtk.h>
+#include "ui/gui/pspp-sheet-view.h"
 
 G_BEGIN_DECLS
 

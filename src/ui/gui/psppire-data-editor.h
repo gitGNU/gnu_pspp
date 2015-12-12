@@ -33,7 +33,6 @@
 #include <gtk/gtk.h>
 
 #include "psppire-data-store.h"
-#include "ui/gui/pspp-sheet-view.h"
 
 G_BEGIN_DECLS
 

@@ -17,14 +17,13 @@
 #ifndef PSPPIRE_DATA_SHEET_H
 #define PSPPIRE_DATA_SHEET_H 1
 
-/* PsppireDataSheet is a PsppSheetView that displays the data in a dataset,
+/* PsppireDataSheet is a GtkTreeView that displays the data in a dataset,
    with one column per variable and one row per case.
 
    PsppireDataSheet is usually a child of PsppireDataEditor in the widget
    hierarchy.  Other widgets can also use it. */
 
 #include <gtk/gtk.h>
-#include "ui/gui/pspp-sheet-view.h"
 
 G_BEGIN_DECLS
 
@@ -40,7 +39,7 @@ typedef struct _PsppireDataSheetClass PsppireDataSheetClass;
 
 struct _PsppireDataSheet
 {
-  PsppSheetView parent;
+  GtkTreeView parent;
 
   struct _PsppireDataStore *data_store;
   gboolean show_value_labels;
@@ -56,7 +55,7 @@ struct _PsppireDataSheet
   GtkClipboard *clip;
   guint on_owner_change_signal;
 
-  PsppSheetViewColumn *new_variable_column;
+  GtkTreeViewColumn *new_variable_column;
 
   GtkBuilder *builder;
 
@@ -67,7 +66,7 @@ struct _PsppireDataSheet
 
 struct _PsppireDataSheetClass 
 {
-  PsppSheetViewClass parent_class;
+  GtkTreeViewClass parent_class;
 };
 
 GType psppire_data_sheet_get_type (void) G_GNUC_CONST;

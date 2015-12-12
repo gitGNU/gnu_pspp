@@ -26,7 +26,6 @@
 #include "libpspp/range-set.h"
 #include "libpspp/str.h"
 #include "ui/gui/helper.h"
-#include "ui/gui/pspp-sheet-selection.h"
 #include "ui/gui/psppire-data-sheet.h"
 #include "ui/gui/psppire-data-store.h"
 #include "ui/gui/psppire-value-entry.h"
@@ -349,6 +348,7 @@ on_var_sheet_var_double_clicked (PsppireVarSheet *var_sheet, gint dict_index,
 static void
 refresh_entry (PsppireDataEditor *de)
 {
+#if 0
   PsppireDataSheet *data_sheet = psppire_data_editor_get_active_data_sheet (de);
   PsppSheetView *sheet_view = PSPP_SHEET_VIEW (data_sheet);
   PsppSheetSelection *selection = pspp_sheet_view_get_selection (sheet_view);
@@ -455,6 +455,7 @@ refresh_entry (PsppireDataEditor *de)
   gtk_label_set_label (GTK_LABEL (de->cell_ref_label),
                        ref_cell_text ? ref_cell_text : "");
   g_free (ref_cell_text);
+#endif
 }
 
 static void
@@ -480,25 +481,24 @@ on_datum_entry_activate (PsppireValueEntry *entry, PsppireDataEditor *de)
 }
 
 static void
-on_data_sheet_selection_changed (PsppSheetSelection *selection,
+on_data_sheet_selection_changed (GtkTreeSelection *selection,
                                  PsppireDataEditor *de)
 {
   /* In a split view, ensure that only a single data sheet has a nonempty
      selection.  */
   if (de->split
-      && pspp_sheet_selection_count_selected_rows (selection)
-      && pspp_sheet_selection_count_selected_columns (selection))
+      && gtk_tree_selection_count_selected_rows (selection))
     {
       PsppireDataSheet *ds;
       int i;
 
       FOR_EACH_DATA_SHEET (ds, i, de)
         {
-          PsppSheetSelection *s;
+          GtkTreeSelection *s;
 
-          s = pspp_sheet_view_get_selection (PSPP_SHEET_VIEW (ds));
+          s = gtk_tree_view_get_selection (GTK_TREE_VIEW (ds));
           if (s != selection)
-            pspp_sheet_selection_unselect_all (s);
+            gtk_tree_selection_unselect_all (s);
         }
     }
 
@@ -521,13 +521,14 @@ on_data_sheet_fixed_height_notify (PsppireDataSheet *ds,
       BL = GTK_XPANED_BOTTOM_LEFT,
       BR = GTK_XPANED_BOTTOM_RIGHT
     };
+#if 0
+  int fixed_height = gtk_tree_view_get_fixed_height (GTK_TREE_VIEW (ds));
 
-  int fixed_height = pspp_sheet_view_get_fixed_height (PSPP_SHEET_VIEW (ds));
-
-  pspp_sheet_view_set_fixed_height (PSPP_SHEET_VIEW (de->data_sheets[TR]),
+  gtk_tree_view_set_fixed_height (GTK_TREE_VIEW (de->data_sheets[TR]),
                                     fixed_height);
-  pspp_sheet_view_set_fixed_height (PSPP_SHEET_VIEW (de->data_sheets[BR]),
+  gtk_tree_view_set_fixed_height (GTK_TREE_VIEW (de->data_sheets[BR]),
                                     fixed_height);
+#endif
 }
 
 static void
@@ -538,7 +539,7 @@ disconnect_data_sheets (PsppireDataEditor *de)
 
   FOR_EACH_DATA_SHEET (ds, i, de)
     {
-      PsppSheetSelection *selection;
+      GtkTreeSelection *selection;
 
       if (ds == NULL)
         {
@@ -555,7 +556,7 @@ disconnect_data_sheets (PsppireDataEditor *de)
       g_signal_handlers_disconnect_by_func (
         ds, G_CALLBACK (on_data_sheet_var_double_clicked), de);
 
-      selection = pspp_sheet_view_get_selection (PSPP_SHEET_VIEW (ds));
+      selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (ds));
       g_signal_handlers_disconnect_by_func (
         selection, G_CALLBACK (on_data_sheet_selection_changed), de);
 
@@ -567,20 +568,21 @@ static GtkWidget *
 make_data_sheet (PsppireDataEditor *de, GtkTreeViewGridLines grid_lines,
                  gboolean show_value_labels)
 {
-  PsppSheetSelection *selection;
+  GtkTreeSelection *selection;
   GtkWidget *ds;
 
   ds = psppire_data_sheet_new ();
-  pspp_sheet_view_set_grid_lines (PSPP_SHEET_VIEW (ds), grid_lines);
+  gtk_tree_view_set_grid_lines (GTK_TREE_VIEW (ds), grid_lines);
   psppire_data_sheet_set_value_labels (PSPPIRE_DATA_SHEET (ds),
                                        show_value_labels);
+  gtk_tree_view_set_fixed_height_mode (GTK_TREE_VIEW (ds), TRUE);
 
   g_signal_connect_swapped (ds, "notify::value-labels",
                             G_CALLBACK (refresh_entry), de);
   g_signal_connect (ds, "var-double-clicked",
                     G_CALLBACK (on_data_sheet_var_double_clicked), de);
 
-  selection = pspp_sheet_view_get_selection (PSPP_SHEET_VIEW (ds));
+  selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (ds));
   g_signal_connect (selection, "changed",
                     G_CALLBACK (on_data_sheet_selection_changed), de);
 
@@ -618,7 +620,7 @@ make_split_datasheet (PsppireDataEditor *de, GtkTreeViewGridLines grid_lines,
       BR                        /* bottom right */
     };
 
-  PsppSheetView *ds[4];
+  GtkTreeView *ds[4];
   GtkXPaned *xpaned;
   int i;
 
@@ -631,19 +633,19 @@ make_split_datasheet (PsppireDataEditor *de, GtkTreeViewGridLines grid_lines,
       GtkWidget *scroller;
 
       de->data_sheets[i] = make_data_sheet (de, grid_lines, show_value_labels);
-      ds[i] = PSPP_SHEET_VIEW (de->data_sheets[i]);
+      ds[i] = GTK_TREE_VIEW (de->data_sheets[i]);
 
       if (i == BL)
-        hadjust = pspp_sheet_view_get_hadjustment (ds[TL]);
+        hadjust = gtk_tree_view_get_hadjustment (ds[TL]);
       else if (i == BR)
-        hadjust = pspp_sheet_view_get_hadjustment (ds[TR]);
+        hadjust = gtk_tree_view_get_hadjustment (ds[TR]);
       else
         hadjust = NULL;
 
       if (i == TR)
-        vadjust = pspp_sheet_view_get_vadjustment (ds[TL]);
+        vadjust = gtk_tree_view_get_vadjustment (ds[TL]);
       else if (i == BR)
-        vadjust = pspp_sheet_view_get_vadjustment (ds[BL]);
+        vadjust = gtk_tree_view_get_vadjustment (ds[BL]);
       else
         vadjust = NULL;
 
@@ -680,8 +682,8 @@ make_split_datasheet (PsppireDataEditor *de, GtkTreeViewGridLines grid_lines,
     }
 
   /* Bottom sheets don't display variable names. */
-  pspp_sheet_view_set_headers_visible (ds[BL], FALSE);
-  pspp_sheet_view_set_headers_visible (ds[BR], FALSE);
+  gtk_tree_view_set_headers_visible (ds[BL], FALSE);
+  gtk_tree_view_set_headers_visible (ds[BR], FALSE);
 
   /* Right sheets don't display case numbers. */
   psppire_data_sheet_set_case_numbers (PSPPIRE_DATA_SHEET (ds[TR]), FALSE);
@@ -792,7 +794,7 @@ psppire_data_editor_show_grid (PsppireDataEditor *de, gboolean grid_visible)
           : GTK_TREE_VIEW_GRID_LINES_NONE);
 
   FOR_EACH_DATA_SHEET (data_sheet, i, de)
-    pspp_sheet_view_set_grid_lines (PSPP_SHEET_VIEW (data_sheet), grid);
+    gtk_tree_view_set_grid_lines (GTK_TREE_VIEW (data_sheet), grid);
   gtk_tree_view_set_grid_lines (GTK_TREE_VIEW (de->var_sheet), grid);
 }
 
@@ -838,8 +840,8 @@ psppire_data_editor_split_window (PsppireDataEditor *de, gboolean split)
     return;
 
 
-  grid_lines = pspp_sheet_view_get_grid_lines (
-    PSPP_SHEET_VIEW (de->data_sheets[0]));
+  grid_lines = gtk_tree_view_get_grid_lines (
+    GTK_TREE_VIEW (de->data_sheets[0]));
   labels = psppire_data_sheet_get_value_labels (PSPPIRE_DATA_SHEET (
                                                   de->data_sheets[0]));
 
@@ -916,13 +918,14 @@ psppire_data_editor_get_active_data_sheet (PsppireDataEditor *de)
          that one. */
       FOR_EACH_DATA_SHEET (data_sheet, i, de)
         {
-          PsppSheetSelection *selection;
-
-          selection = pspp_sheet_view_get_selection (
-            PSPP_SHEET_VIEW (data_sheet));
+          GtkTreeSelection *selection;
+#if 0
+          selection = gtk_tree_view_get_selection (
+                                           GTK_TREE_VIEW (data_sheet));
           if (pspp_sheet_selection_count_selected_rows (selection)
               && pspp_sheet_selection_count_selected_columns (selection))
             return data_sheet;
+#endif
         }
     }
 
